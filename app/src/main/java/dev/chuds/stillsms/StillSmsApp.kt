@@ -164,6 +164,12 @@ fun StillSmsApp(
     // Long-press menus (one for the thread list, one for inside a thread).
     var longPressedThread by remember { mutableStateOf<Thread?>(null) }
     var longPressedMessage by remember { mutableStateOf<Message?>(null) }
+    // Any route change makes a hoisted long-press selection stale. Without this, the
+    // sheet would render against a thread/message no longer being viewed.
+    LaunchedEffect(route) {
+        longPressedThread = null
+        longPressedMessage = null
+    }
     // One-shot toast-style banner for export results — kept inside StillSmsApp so it
     // surfaces over the SettingsScreen route. Cleared after a few seconds.
     var exportBanner by remember { mutableStateOf<String?>(null) }

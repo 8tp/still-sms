@@ -63,15 +63,27 @@ class ThreadRepository(
     suspend fun fetchMessages(threadId: Long): List<Message> =
         withContext(Dispatchers.IO) { queryMessages(threadId) }
 
-    /** Toggle the archived bit on a thread. Hidden threads still live in the provider. */
+    /**
+     * Toggle the archived bit on a thread. Hidden threads still live in the provider —
+     * `queryThreads()` filters them with `WHERE archived = 0`.
+     *
+     * Why this exact URI + selection (and not the obvious `conversations/<id>`):
+     * AOSP's MmsSmsProvider has NO update matcher for `content://mms-sms/conversations/<id>`
+     * — calling that path raises SQLiteException at runtime. The canonical write target is
+     * `Telephony.Threads.CONTENT_URI` (= `content://mms-sms/conversations`, no id) with a
+     * `_id = ?` selection. `deleteThread` happens to use the /<id> form because the
+     * provider's *delete* matcher does accept it; update and delete are not symmetric here.
+     */
     suspend fun setArchived(threadId: Long, archived: Boolean): Unit = withContext(Dispatchers.IO) {
-        val v = android.content.ContentValues().apply {
+        val values = android.content.ContentValues().apply {
             put(Telephony.Threads.ARCHIVED, if (archived) 1 else 0)
         }
         runCatching {
             resolver.update(
-                Uri.withAppendedPath(Telephony.Threads.CONTENT_URI, threadId.toString()),
-                v, null, null,
+                Telephony.Threads.CONTENT_URI,
+                values,
+                "${Telephony.Threads._ID} = ?",
+                arrayOf(threadId.toString()),
             )
         }
     }

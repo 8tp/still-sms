@@ -11,8 +11,9 @@
     Permissions (each disclosed honestly in the README):
     - SEND_SMS:           outgoing SMS via SmsManager.sendTextMessage().
     - READ_SMS:           render threads from the system mms-sms provider.
-    - RECEIVE_SMS:        catch inbound SMS before SMS_DELIVER (compat).
-    - RECEIVE_MMS:        catch inbound MMS WAP push.
+    - RECEIVE_SMS:        catch inbound SMS as the default-SMS app.
+    - RECEIVE_MMS:        catch inbound MMS WAP push notifications.
+    - RECEIVE_WAP_PUSH:   sister-permission required by the WAP_PUSH_DELIVER intent filter.
     - READ_CONTACTS:      resolve numbers → display names from ContactsContract.
     - POST_NOTIFICATIONS: Android 13+, surface new-message notifications.
 

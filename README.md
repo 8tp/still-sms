@@ -65,7 +65,7 @@ None of these involve the network. None pull a third-party SDK.
 
 | File | What it guarantees |
 | --- | --- |
-| `app/src/main/AndroidManifest.xml` | Six permissions declared (the asks above); no `INTERNET`, no `READ_PHONE_STATE`, no media-scope, no location, no biometrics. Four manifest entries for the default-SMS role: SENDTO activity, SMS_DELIVER + WAP_PUSH_DELIVER receivers, RESPOND_VIA_MESSAGE service. |
+| `app/src/main/AndroidManifest.xml` | Seven permissions declared (the asks above; `RECEIVE_MMS` and `RECEIVE_WAP_PUSH` are sister-permissions for inbound MMS); no `INTERNET`, no `READ_PHONE_STATE`, no media-scope, no location, no biometrics. Four manifest entries for the default-SMS role: SENDTO activity, SMS_DELIVER + WAP_PUSH_DELIVER receivers, RESPOND_VIA_MESSAGE service. |
 | `app/src/main/res/xml/data_extraction_rules.xml` | Excludes every sharedpref / file / database domain from cloud backup and device transfer. |
 | `app/build.gradle.kts` | Dependencies only on AndroidX, Compose, and DataStore — no Firebase, no GMS, no analytics SDK, no `smsmms` / Klinker library. |
 | `app/src/main/java/dev/chuds/stillsms/mms/` | Hand-rolled M-Send.req encoder + M-Notification.ind / M-Retrieve.conf decoder; no third-party PDU library. Wire format from OMA-WAP-MMS-ENC-V1_3 §7 + OMA-WAP-WSP-V1_0 §8.4. |
