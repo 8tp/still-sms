@@ -1,0 +1,4 @@
+<!-- FileProvider mapping. The MMS send path stages PDU and image parts here, then hands a content:// URI to SmsManager.sendMultimediaMessage. -->
+<paths>
+    <cache-path name="mms_outbox" path="mms_outbox/" />
+</paths>

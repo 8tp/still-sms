@@ -1,0 +1,16 @@
+# Gradle / Android build artifacts
+/.gradle/
+/build/
+/app/build/
+/captures/
+/.kotlin/
+
+# Local environment
+local.properties
+*.iml
+.idea/
+.DS_Store
+
+# Keystores never live in the repo.
+*.jks
+*.keystore

@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android manifest for Still SMS.
+
+    Privacy posture (matches still-launcher / still-notes / still-clock / still-contacts):
+    - No INTERNET permission. Ever.
+    - No analytics, telemetry, or background services beyond what the SMS role strictly
+      requires (BROADCAST_SMS / BROADCAST_WAP_PUSH receivers, RESPOND_VIA_MESSAGE service).
+    - Block list lives as plaintext JSON in filesDir/.
+
+    Permissions (each disclosed honestly in the README):
+    - SEND_SMS:           outgoing SMS via SmsManager.sendTextMessage().
+    - READ_SMS:           render threads from the system mms-sms provider.
+    - RECEIVE_SMS:        catch inbound SMS before SMS_DELIVER (compat).
+    - RECEIVE_MMS:        catch inbound MMS WAP push.
+    - READ_CONTACTS:      resolve numbers → display names from ContactsContract.
+    - POST_NOTIFICATIONS: Android 13+, surface new-message notifications.
+
+    To be eligible for RoleManager.ROLE_SMS, the app must declare four manifest entries:
+    a SENDTO activity for sms:/smsto:/mms:/mmsto:, an SMS_DELIVER receiver guarded by
+    BROADCAST_SMS, a WAP_PUSH_DELIVER receiver guarded by BROADCAST_WAP_PUSH, and a
+    RESPOND_VIA_MESSAGE service guarded by SEND_RESPOND_VIA_MESSAGE. All four are below.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_MMS" />
+    <uses-permission android:name="android.permission.RECEIVE_WAP_PUSH" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
+        android:icon="@drawable/ic_still_sms_launcher"
+        android:roundIcon="@drawable/ic_still_sms_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.StillSms"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- (1) SENDTO compose activity. Required for the default-SMS role: an external
+             app firing Intent(ACTION_SENDTO, "smsto:+15551234567") must land here. -->
+        <activity
+            android:name=".ComposeActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.SENDTO" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="sms" />
+                <data android:scheme="smsto" />
+                <data android:scheme="mms" />
+                <data android:scheme="mmsto" />
+            </intent-filter>
+        </activity>
+
+        <!-- (2) SMS_DELIVER receiver. The system delivers inbound SMS PDUs only to the
+             default SMS app. Guarded by android.permission.BROADCAST_SMS so only the
+             system can fire it. -->
+        <receiver
+            android:name=".sms.SmsDeliverReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.SMS_DELIVER" />
+            </intent-filter>
+        </receiver>
+
+        <!-- (3) WAP_PUSH_DELIVER receiver. The system delivers inbound MMS notifications
+             only to the default SMS app. Guarded by android.permission.BROADCAST_WAP_PUSH. -->
+        <receiver
+            android:name=".mms.MmsDeliverReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_WAP_PUSH">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.WAP_PUSH_DELIVER" />
+                <data android:mimeType="application/vnd.wap.mms-message" />
+            </intent-filter>
+        </receiver>
+
+        <!-- (4) RESPOND_VIA_MESSAGE service. Lets the dialer's "decline + reply" UI route
+             a quick text reply through us. Guarded by SEND_RESPOND_VIA_MESSAGE. -->
+        <service
+            android:name=".sms.RespondViaMessageService"
+            android:exported="true"
+            android:permission="android.permission.SEND_RESPOND_VIA_MESSAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.RESPOND_VIA_MESSAGE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="sms" />
+                <data android:scheme="smsto" />
+                <data android:scheme="mms" />
+                <data android:scheme="mmsto" />
+            </intent-filter>
+        </service>
+
+        <!-- Result receivers for outbound sentIntent / deliveredIntent. Not exported. -->
+        <receiver
+            android:name=".sms.SmsSentReceiver"
+            android:enabled="true"
+            android:exported="false" />
+        <receiver
+            android:name=".sms.SmsDeliveredReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!-- RemoteInput quick-reply landing pad. Not exported. -->
+        <receiver
+            android:name=".notif.QuickReplyReceiver"
+            android:enabled="true"
+            android:exported="false" />
+        <receiver
+            android:name=".notif.MarkReadReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!-- FileProvider for staging MMS PDU + image parts in cacheDir. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

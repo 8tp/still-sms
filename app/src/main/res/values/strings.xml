@@ -1,0 +1,7 @@
+<!-- App strings. Keep names short and quiet, like the launcher and notes. -->
+<resources>
+    <string name="app_name">Still SMS</string>
+    <string name="messages_channel_name">messages</string>
+    <string name="messages_channel_description">incoming sms / mms, fired locally</string>
+    <string name="default_reply_label">reply</string>
+</resources>
