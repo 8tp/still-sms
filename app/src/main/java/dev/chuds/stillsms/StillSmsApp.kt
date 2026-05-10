@@ -39,6 +39,7 @@ import dev.chuds.stillsms.data.SmsRoleHelper
 import dev.chuds.stillsms.data.SmsSettings
 import dev.chuds.stillsms.data.Thread
 import dev.chuds.stillsms.data.ThreadRepository
+import dev.chuds.stillsms.mms.MmsSender
 import dev.chuds.stillsms.notif.NotificationChannels
 import dev.chuds.stillsms.sms.SmsSender
 import dev.chuds.stillsms.ui.blocklist.BlockListScreen
@@ -147,6 +148,23 @@ fun StillSmsApp(
         isDefault = SmsRoleHelper.isDefault(activityContext)
     }
 
+    // Pending state for the MMS attach flow. We capture (address, draft) when the user
+    // taps "+", launch SAF, and on result hand the picked image to MmsSender alongside
+    // the draft we captured (used as the MMS caption).
+    var pendingAttach by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    val attachPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri ->
+        val pending = pendingAttach
+        pendingAttach = null
+        if (uri == null || pending == null) return@rememberLauncherForActivityResult
+        val (addr, caption) = pending
+        scope.launch {
+            MmsSender.send(activityContext, addr, caption.takeIf { it.isNotBlank() }, uri)
+        }
+    }
+
     val contactPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
@@ -252,7 +270,13 @@ fun StillSmsApp(
                                     }
                                 }
                             },
-                            onAttach = { /* 0.3 */ },
+                            onAttach = { currentDraft ->
+                                if (resolvedAddress.isNotBlank()) {
+                                    pendingAttach = resolvedAddress to currentDraft
+                                    runCatching { attachPickerLauncher.launch("image/*") }
+                                        .onFailure { pendingAttach = null }
+                                }
+                            },
                             onLongPressMessage = { /* 0.4 */ },
                             onOpenContact = {
                                 if (resolvedAddress.isNotBlank()) {

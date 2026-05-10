@@ -57,7 +57,7 @@ fun ThreadScreen(
     settings: SmsSettings,
     canSend: Boolean,
     onSend: (String) -> Unit,
-    onAttach: () -> Unit,
+    onAttach: (currentDraft: String) -> Unit,
     onLongPressMessage: (Message) -> Unit,
     onOpenContact: () -> Unit,
     onBack: () -> Unit,
@@ -133,7 +133,10 @@ fun ThreadScreen(
                         draft = ""
                     }
                 },
-                onAttach = onAttach,
+                onAttach = {
+                    onAttach(draft)
+                    draft = ""
+                },
                 enabled = canSend,
             )
         }

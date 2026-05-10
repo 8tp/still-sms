@@ -120,6 +120,17 @@
             android:enabled="true"
             android:exported="false" />
 
+        <!-- MMS sentIntent + downloadedIntent landing pads. Not exported; the system
+             dispatches the broadcasts via PendingIntents we hand to SmsManager. -->
+        <receiver
+            android:name=".mms.MmsSentReceiver"
+            android:enabled="true"
+            android:exported="false" />
+        <receiver
+            android:name=".mms.MmsDownloadReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
         <!-- RemoteInput quick-reply landing pad. Not exported. -->
         <receiver
             android:name=".notif.QuickReplyReceiver"
