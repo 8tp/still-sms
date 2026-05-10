@@ -58,13 +58,15 @@ class SmsDeliverReceiver : BroadcastReceiver() {
         }
 
         if (threadId > 0 && body.isNotBlank()) {
-            // Best-effort sender display; ContactNameResolver is process-cached so this is
-            // cheap even when the broadcast wakes a cold process.
-            val name = sender
+            // Best-effort sender display: contact lookup runs synchronously here because
+            // we're already on a background broadcast thread.
+            val resolver = dev.chuds.stillsms.data.ContactNameResolver(context)
+            val displayed = resolver.displayName(sender) ?: sender.ifBlank { "(unknown)" }
             NewMessageNotifier.post(
                 context = context,
                 threadId = threadId,
-                sender = name.ifBlank { "(unknown)" },
+                address = sender,
+                sender = displayed,
                 preview = body.take(280),
             )
         }

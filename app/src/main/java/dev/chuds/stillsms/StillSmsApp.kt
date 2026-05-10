@@ -6,6 +6,8 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.net.Uri
+import android.provider.ContactsContract
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -38,6 +40,7 @@ import dev.chuds.stillsms.data.SmsSettings
 import dev.chuds.stillsms.data.Thread
 import dev.chuds.stillsms.data.ThreadRepository
 import dev.chuds.stillsms.notif.NotificationChannels
+import dev.chuds.stillsms.sms.SmsSender
 import dev.chuds.stillsms.ui.blocklist.BlockListScreen
 import dev.chuds.stillsms.ui.components.rememberHapticsPerformer
 import dev.chuds.stillsms.ui.settings.SettingsScreen
@@ -59,7 +62,11 @@ private sealed interface Route {
 }
 
 @Composable
-fun StillSmsApp(initialThreadId: Long? = null) {
+fun StillSmsApp(
+    initialThreadId: Long? = null,
+    initialAddress: String? = null,
+    initialPrefillBody: String? = null,
+) {
     val context = LocalContext.current.applicationContext
     val activityContext = LocalContext.current
 
@@ -106,6 +113,12 @@ fun StillSmsApp(initialThreadId: Long? = null) {
         val match = threads.firstOrNull { it.id == tid } ?: return@LaunchedEffect
         route = Route.Thread(tid, match.address)
     }
+    // ACTION_SENDTO landed in MainActivity → resolve to a Thread route by address.
+    LaunchedEffect(initialAddress) {
+        val addr = initialAddress?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        val tid = threadRepository.threadIdForAddress(addr)
+        route = Route.Thread(tid, addr)
+    }
 
     BackHandler(enabled = route !is Route.Threads) {
         route = when (route) {
@@ -132,6 +145,25 @@ fun StillSmsApp(initialThreadId: Long? = null) {
         ActivityResultContracts.StartActivityForResult(),
     ) {
         isDefault = SmsRoleHelper.isDefault(activityContext)
+    }
+
+    val contactPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        if (result.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
+        val data = result.data?.data ?: return@rememberLauncherForActivityResult
+        // Two shapes work here:
+        //   1) An ACTION_PICK against vnd.android.cursor.dir/contact returns a contact URI;
+        //      we read the lookup key and pull the primary phone.
+        //   2) An ACTION_PICK against vnd.android.cursor.dir/phone_v2 returns a phone-row URI;
+        //      address is in CommonDataKinds.Phone.NUMBER.
+        scope.launch {
+            val number = resolvePickedNumber(activityContext, data)
+            if (!number.isNullOrBlank()) {
+                val tid = threadRepository.threadIdForAddress(number)
+                route = Route.Thread(tid, number)
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -173,9 +205,10 @@ fun StillSmsApp(initialThreadId: Long? = null) {
                             // 0.4 will hook this into the archive / block / delete overflow.
                         },
                         onCompose = {
-                            // 0.2 wires the contact-picker; 0.1 routes to a stub thread (id = 0)
-                            // so the user can see the empty composer screen.
-                            route = Route.Thread(0L, "")
+                            val pickIntent = Intent(Intent.ACTION_PICK).apply {
+                                type = ContactsContract.CommonDataKinds.Phone.CONTENT_TYPE
+                            }
+                            runCatching { contactPickerLauncher.launch(pickIntent) }
                         },
                         onOpenSettings = { route = Route.Settings },
                     )
@@ -190,22 +223,31 @@ fun StillSmsApp(initialThreadId: Long? = null) {
                         }
                         val messages by messagesFlow.collectAsState()
                         val thread = threads.firstOrNull { it.id == current.threadId }
+                        val resolvedAddress = thread?.address?.takeIf { it.isNotBlank() } ?: current.address
                         ThreadScreen(
                             title = thread?.displayName?.takeIf { it.isNotBlank() }
-                                ?: thread?.address?.takeIf { it.isNotBlank() }
-                                ?: current.address.ifBlank { "new" },
+                                ?: resolvedAddress.ifBlank { "new" },
                             subtitle = thread?.let { if (it.displayName.isNullOrBlank()) null else it.address },
                             messages = messages,
                             settings = settings,
-                            canSend = false, // 0.2 turns this on
-                            onSend = { /* 0.2 */ },
+                            canSend = isDefault && resolvedAddress.isNotBlank(),
+                            onSend = { body ->
+                                scope.launch {
+                                    val sentUri = SmsSender.send(activityContext, resolvedAddress, body)
+                                    // Once the row lands, the ContentObserver will flow the
+                                    // outbound message back into the LazyColumn — nothing
+                                    // else to do here.
+                                    if (sentUri == null) {
+                                        // No-op for 0.2; 0.4 surfaces a red "send failed" hint.
+                                    }
+                                }
+                            },
                             onAttach = { /* 0.3 */ },
-                            onLongPressMessage = { /* 0.2 */ },
+                            onLongPressMessage = { /* 0.4 */ },
                             onOpenContact = {
-                                val number = thread?.address ?: current.address
-                                if (number.isNotBlank()) {
+                                if (resolvedAddress.isNotBlank()) {
                                     val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-                                        data = android.net.Uri.parse("tel:$number")
+                                        data = Uri.parse("tel:$resolvedAddress")
                                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                     }
                                     runCatching { activityContext.startActivity(viewIntent) }
@@ -262,3 +304,42 @@ fun StillSmsApp(initialThreadId: Long? = null) {
         }
     }
 }
+
+/** Resolve an ACTION_PICK result URI to a phone number string. */
+private suspend fun resolvePickedNumber(context: android.content.Context, data: Uri): String? =
+    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val resolver = context.contentResolver
+        // Phone-row URIs (vnd.android.cursor.item/phone_v2) carry NUMBER directly.
+        runCatching {
+            resolver.query(
+                data,
+                arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
+                null, null, null,
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    val n = c.getString(0)
+                    if (!n.isNullOrBlank()) return@withContext n
+                }
+            }
+        }
+        // Fallback: contact URI → look up primary phone.
+        runCatching {
+            resolver.query(
+                data,
+                arrayOf(ContactsContract.Contacts._ID),
+                null, null, null,
+            )?.use { c ->
+                if (!c.moveToFirst()) return@withContext null
+                val contactId = c.getLong(0)
+                resolver.query(
+                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                    arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
+                    "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
+                    arrayOf(contactId.toString()),
+                    "${ContactsContract.Data.IS_SUPER_PRIMARY} DESC, ${ContactsContract.Data.IS_PRIMARY} DESC, ${ContactsContract.Data._ID} ASC",
+                )?.use { phones ->
+                    if (phones.moveToFirst()) phones.getString(0) else null
+                }
+            }
+        }.getOrNull()
+    }

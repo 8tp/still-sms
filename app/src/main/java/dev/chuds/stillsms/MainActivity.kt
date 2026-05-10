@@ -20,10 +20,16 @@ class MainActivity : ComponentActivity() {
         )
 
         val initialThreadId = consumeOpenThreadExtra(intent)
+        val composeRecipient = consumeComposeRecipient(intent)
+        val composePrefill = consumeComposePrefill(intent)
 
         setContent {
             StillTheme {
-                StillSmsApp(initialThreadId = initialThreadId)
+                StillSmsApp(
+                    initialThreadId = initialThreadId,
+                    initialAddress = composeRecipient,
+                    initialPrefillBody = composePrefill,
+                )
             }
         }
     }
@@ -34,6 +40,21 @@ class MainActivity : ComponentActivity() {
         intent.action = null
         intent.removeExtra(EXTRA_THREAD_ID)
         return id.takeIf { it > 0 }
+    }
+
+    private fun consumeComposeRecipient(intent: Intent?): String? {
+        if (intent?.action != ComposeActivity.ACTION_COMPOSE) return null
+        val r = intent.getStringExtra(ComposeActivity.EXTRA_RECIPIENT)
+        return r?.takeIf { it.isNotBlank() }
+    }
+
+    private fun consumeComposePrefill(intent: Intent?): String? {
+        if (intent?.action != ComposeActivity.ACTION_COMPOSE) return null
+        val body = intent.getStringExtra(ComposeActivity.EXTRA_PREFILL_BODY)
+        intent.action = null
+        intent.removeExtra(ComposeActivity.EXTRA_RECIPIENT)
+        intent.removeExtra(ComposeActivity.EXTRA_PREFILL_BODY)
+        return body?.takeIf { it.isNotBlank() }
     }
 
     companion object {
