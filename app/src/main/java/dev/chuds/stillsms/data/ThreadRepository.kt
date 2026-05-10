@@ -56,6 +56,26 @@ class ThreadRepository(
     fun observeMessages(threadId: Long): Flow<List<Message>> =
         observeUri(Telephony.MmsSms.CONTENT_URI) { queryMessages(threadId) }
 
+    /** One-shot snapshot — used by the exporter, where Flow semantics are pointless. */
+    suspend fun fetchThreads(): List<Thread> = withContext(Dispatchers.IO) { queryThreads() }
+
+    /** One-shot snapshot of one thread's messages — same caveat as fetchThreads(). */
+    suspend fun fetchMessages(threadId: Long): List<Message> =
+        withContext(Dispatchers.IO) { queryMessages(threadId) }
+
+    /** Toggle the archived bit on a thread. Hidden threads still live in the provider. */
+    suspend fun setArchived(threadId: Long, archived: Boolean): Unit = withContext(Dispatchers.IO) {
+        val v = android.content.ContentValues().apply {
+            put(Telephony.Threads.ARCHIVED, if (archived) 1 else 0)
+        }
+        runCatching {
+            resolver.update(
+                Uri.withAppendedPath(Telephony.Threads.CONTENT_URI, threadId.toString()),
+                v, null, null,
+            )
+        }
+    }
+
     suspend fun threadIdForAddress(address: String): Long = withContext(Dispatchers.IO) {
         // Telephony.Threads.getOrCreateThreadId is the canonical resolver. It synthesizes a
         // thread_id for a never-before-seen address.
@@ -149,6 +169,9 @@ class ThreadRepository(
     private fun queryThreads(): List<Thread> {
         // content://mms-sms/conversations?simple=true returns one row per thread with
         // snippet + recipient_ids + date already joined across sms + mms.
+        // The archived bit hides threads from the primary list per SPEC; we don't yet
+        // expose an "archived" view, so archived threads are gone from the UI until
+        // un-archived (which can only happen via the provider directly today).
         val uri = Telephony.Threads.CONTENT_URI.buildUpon()
             .appendQueryParameter("simple", "true")
             .build()
@@ -161,7 +184,12 @@ class ThreadRepository(
             Telephony.Threads.MESSAGE_COUNT,
         )
         val results = mutableListOf<Thread>()
-        resolver.query(uri, projection, null, null, "${Telephony.Threads.DATE} DESC")?.use { cursor ->
+        resolver.query(
+            uri, projection,
+            "${Telephony.Threads.ARCHIVED} = 0",
+            null,
+            "${Telephony.Threads.DATE} DESC",
+        )?.use { cursor ->
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(0)
                 val recipientIds = cursor.getString(1).orEmpty()

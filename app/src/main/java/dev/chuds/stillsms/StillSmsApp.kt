@@ -17,8 +17,11 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -34,15 +37,19 @@ import androidx.core.content.ContextCompat
 import dev.chuds.stillsms.data.BlockListRepository
 import dev.chuds.stillsms.data.ContactNameResolver
 import dev.chuds.stillsms.data.FontPreset
+import dev.chuds.stillsms.data.Message
 import dev.chuds.stillsms.data.PreferencesRepository
 import dev.chuds.stillsms.data.SmsRoleHelper
 import dev.chuds.stillsms.data.SmsSettings
 import dev.chuds.stillsms.data.Thread
+import dev.chuds.stillsms.data.ThreadExporter
 import dev.chuds.stillsms.data.ThreadRepository
 import dev.chuds.stillsms.mms.MmsSender
 import dev.chuds.stillsms.notif.NotificationChannels
 import dev.chuds.stillsms.sms.SmsSender
 import dev.chuds.stillsms.ui.blocklist.BlockListScreen
+import dev.chuds.stillsms.ui.components.StillAction
+import dev.chuds.stillsms.ui.components.StillActionSheet
 import dev.chuds.stillsms.ui.components.rememberHapticsPerformer
 import dev.chuds.stillsms.ui.settings.SettingsScreen
 import dev.chuds.stillsms.ui.theme.LocalHaptics
@@ -75,6 +82,7 @@ fun StillSmsApp(
     val threadRepository = remember(context, contactResolver) { ThreadRepository(context, contactResolver) }
     val blockListRepository = remember(context) { BlockListRepository(context) }
     val preferencesRepository = remember(context) { PreferencesRepository(context) }
+    val threadExporter = remember(context, threadRepository) { ThreadExporter(context, threadRepository) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
@@ -153,6 +161,31 @@ fun StillSmsApp(
     // the draft we captured (used as the MMS caption).
     var pendingAttach by remember { mutableStateOf<Pair<String, String>?>(null) }
 
+    // Long-press menus (one for the thread list, one for inside a thread).
+    var longPressedThread by remember { mutableStateOf<Thread?>(null) }
+    var longPressedMessage by remember { mutableStateOf<Message?>(null) }
+    // One-shot toast-style banner for export results — kept inside StillSmsApp so it
+    // surfaces over the SettingsScreen route. Cleared after a few seconds.
+    var exportBanner by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(exportBanner) {
+        if (exportBanner != null) {
+            kotlinx.coroutines.delay(3000)
+            exportBanner = null
+        }
+    }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip"),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val result = threadExporter.exportTo(uri)
+            exportBanner = if (!result.success) "export failed"
+            else if (result.isEmpty) "nothing to export"
+            else "exported ${result.threadCount} thread${if (result.threadCount == 1) "" else "s"} (${result.messageCount} messages)"
+        }
+    }
+
     val attachPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent(),
     ) { uri ->
@@ -219,9 +252,7 @@ fun StillSmsApp(
                         isDefaultApp = isDefault,
                         onRequestDefault = ::requestRole,
                         onOpenThread = { thread -> route = Route.Thread(thread.id, thread.address) },
-                        onLongPressThread = { _ ->
-                            // 0.4 will hook this into the archive / block / delete overflow.
-                        },
+                        onLongPressThread = { thread -> longPressedThread = thread },
                         onCompose = {
                             val pickIntent = Intent(Intent.ACTION_PICK).apply {
                                 type = ContactsContract.CommonDataKinds.Phone.CONTENT_TYPE
@@ -277,7 +308,7 @@ fun StillSmsApp(
                                         .onFailure { pendingAttach = null }
                                 }
                             },
-                            onLongPressMessage = { /* 0.4 */ },
+                            onLongPressMessage = { msg -> longPressedMessage = msg },
                             onOpenContact = {
                                 if (resolvedAddress.isNotBlank()) {
                                     val viewIntent = Intent(Intent.ACTION_VIEW).apply {
@@ -322,7 +353,11 @@ fun StillSmsApp(
                             scope.launch { preferencesRepository.setMmsAutoDownloadOnMobile(!settings.mmsAutoDownloadOnMobile) }
                         },
                         onOpenBlockList = { route = Route.BlockList },
-                        onExport = { /* 0.4 */ },
+                        onExport = {
+                            val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                                .format(java.util.Date())
+                            runCatching { exportLauncher.launch("still-sms-$today.zip") }
+                        },
                         onRequestDefault = ::requestRole,
                         onBack = { route = Route.Threads },
                     )
@@ -332,6 +367,84 @@ fun StillSmsApp(
                         onAdd = { number -> scope.launch { blockListRepository.add(number) } },
                         onRemove = { number -> scope.launch { blockListRepository.remove(number) } },
                         onBack = { route = Route.Settings },
+                    )
+                }
+            }
+
+            // Long-press overflow for the thread list. Lives at the StillSmsApp level so
+            // the actions can read repositories without prop-drilling them into ThreadListScreen.
+            longPressedThread?.let { th ->
+                StillActionSheet(
+                    title = th.displayName?.takeIf { it.isNotBlank() } ?: th.address,
+                    actions = listOf(
+                        StillAction(label = "archive") {
+                            scope.launch { threadRepository.setArchived(th.id, true) }
+                        },
+                        StillAction(label = "block") {
+                            scope.launch {
+                                blockListRepository.add(th.address)
+                                threadRepository.deleteThread(th.id)
+                            }
+                        },
+                        StillAction(label = "delete", destructive = true) {
+                            scope.launch { threadRepository.deleteThread(th.id) }
+                        },
+                    ),
+                    onDismiss = { longPressedThread = null },
+                )
+            }
+
+            // Long-press overflow for individual messages.
+            longPressedMessage?.let { msg ->
+                val clipboard = remember { activityContext.getSystemService(android.content.ClipboardManager::class.java) }
+                StillActionSheet(
+                    title = msg.body.take(120).takeIf { it.isNotBlank() }
+                        ?: if (msg.isMms) "[image]" else null,
+                    actions = listOf(
+                        StillAction(label = "copy") {
+                            val clip = android.content.ClipData.newPlainText("still-sms", msg.body)
+                            runCatching { clipboard?.setPrimaryClip(clip) }
+                        },
+                        StillAction(label = "forward") {
+                            // ACTION_SENDTO with the body prefilled — the recipient picker is
+                            // either us (we'll handle the smsto: scheme in ComposeActivity) or
+                            // another SMS app the user has installed.
+                            val intent = Intent(Intent.ACTION_SENDTO).apply {
+                                data = Uri.parse("smsto:")
+                                putExtra("sms_body", msg.body)
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            runCatching { activityContext.startActivity(intent) }
+                        },
+                        StillAction(label = "delete", destructive = true) {
+                            scope.launch { threadRepository.deleteMessage(msg.id, msg.isMms) }
+                        },
+                    ),
+                    onDismiss = { longPressedMessage = null },
+                )
+            }
+
+            // One-shot result banner pinned to the top under the status bar.
+            exportBanner?.let { msg ->
+                Box(
+                    modifier = Modifier
+                        .align(androidx.compose.ui.Alignment.TopCenter)
+                        .padding(top = 56.dp, start = 16.dp, end = 16.dp)
+                        .background(
+                            StillColors.OledBlack,
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+                        )
+                        .border(
+                            1.dp,
+                            StillColors.Hairline,
+                            androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+                        )
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                ) {
+                    androidx.compose.material3.Text(
+                        text = msg,
+                        style = dev.chuds.stillsms.ui.theme.StillTypography.Small,
+                        color = StillColors.SoftWhite,
                     )
                 }
             }
