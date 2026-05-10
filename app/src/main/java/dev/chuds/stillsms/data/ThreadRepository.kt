@@ -199,7 +199,10 @@ class ThreadRepository(
 
     private fun queryMessages(threadId: Long): List<Message> {
         // content://mms-sms/conversations/<threadId> — joined cursor over sms + mms with
-        // a TRANSPORT_TYPE column distinguishing the two.
+        // a TRANSPORT_TYPE column distinguishing the two. NB: column 5 ("type") means two
+        // different things across the join — for SMS it's Sms.TYPE (inbox/sent/queued/...),
+        // for MMS it's Mms.MESSAGE_TYPE (m-send-req/m-retrieve-conf/...). MMS direction
+        // lives in the separate "msg_box" column we tack on at index 11.
         val uri = Uri.parse("content://mms-sms/conversations/$threadId")
         val projection = arrayOf(
             "_id",
@@ -213,6 +216,7 @@ class ThreadRepository(
             "ct_l",
             "sub_id",
             "status",
+            "msg_box",
         )
         val results = mutableListOf<Message>()
         resolver.query(uri, projection, null, null, "date ASC")?.use { cursor ->
@@ -259,15 +263,17 @@ class ThreadRepository(
         val threadId = cursor.getLong(1)
         // MMS dates in the provider are seconds; SMS dates are millis. Normalize.
         val date = cursor.getLong(4) * 1000L
-        val type = cursor.getInt(5)
         val read = cursor.getInt(6) == 1
 
-        // MMS messageBox: 1=inbox, 4=outbox, 2=sent, 5=failed.
-        val direction = when (type) {
+        // MMS direction lives in msg_box, NOT the cursor's "type" alias (which holds
+        // Mms.MESSAGE_TYPE — m-send-req=128 / m-retrieve-conf=132 / etc., not the inbox
+        // bucket). 1=inbox, 4=outbox, 2=sent, 5=failed.
+        val msgBox = cursor.getInt(11)
+        val direction = when (msgBox) {
             Telephony.Mms.MESSAGE_BOX_INBOX -> Direction.Inbound
             else -> Direction.Outbound
         }
-        val failed = type == Telephony.Mms.MESSAGE_BOX_FAILED
+        val failed = msgBox == Telephony.Mms.MESSAGE_BOX_FAILED
 
         val text = mmsTextBody(id) ?: ""
         val attachment = mmsFirstImagePartUri(id)

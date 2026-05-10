@@ -61,8 +61,10 @@ internal object MmsPduDecoder {
                 MmsField.TRANSACTION_ID -> transactionId = readTextString(s)
                 MmsField.MMS_VERSION -> s.read()
                 MmsField.CONTENT_LOCATION -> contentLocation = readTextString(s)
-                MmsField.MESSAGE_ID -> s.read().also { /* discard */ }; // not used
-                MmsField.MESSAGE_CLASS -> s.read()
+                // Message-Id and Message-Class are text-strings per OMA-MMS-ENC §7.2.13 / 7.2.12.
+                // Reading them as a single byte de-syncs every header parse after them.
+                MmsField.MESSAGE_ID -> readTextString(s)
+                MmsField.MESSAGE_CLASS -> readTextString(s)
                 MmsField.MESSAGE_SIZE -> messageSize = readLongInt(s)
                 MmsField.EXPIRY -> skipValueLengthAndBody(s)
                 MmsField.FROM -> from = readEncodedAddress(s)
@@ -94,7 +96,7 @@ internal object MmsPduDecoder {
                 MmsField.TRANSACTION_ID -> transactionId = readTextString(s)
                 MmsField.MMS_VERSION -> s.read()
                 MmsField.MESSAGE_ID -> messageId = readTextString(s)
-                MmsField.MESSAGE_CLASS -> s.read()
+                MmsField.MESSAGE_CLASS -> readTextString(s)   // text-string, not 1-byte short-int
                 MmsField.SUBJECT -> subject = readEncodedString(s)
                 MmsField.FROM -> from = readEncodedAddress(s)
                 MmsField.TO -> readEncodedString(s)?.let { toList += it }

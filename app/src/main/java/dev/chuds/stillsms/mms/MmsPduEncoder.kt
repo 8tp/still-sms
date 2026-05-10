@@ -179,12 +179,17 @@ internal object MmsPduEncoder {
     }
 
     /**
-     * quoted-text-string: same as text-string but the leading '<' marks Content-ID style;
-     * we wrap in <> if the caller didn't and emit as a text-string.
+     * Quoted-string per WSP §8.4.2.1: leading 0x22 (`"`), then the raw text bytes, then
+     * a trailing 0x00 NUL. We use this for Content-IDs because some carriers (notably
+     * T-Mobile US, Vodafone DE) reject Content-IDs that arrive as plain text-strings.
+     * The caller passes the cid wrapped in <> (e.g. "<smil>"); we keep those angle
+     * brackets inside the quoted content per RFC 2392.
      */
     private fun writeQuotedTextString(out: ByteArrayOutputStream, raw: String) {
         val s = if (raw.startsWith("<") && raw.endsWith(">")) raw else "<$raw>"
-        writeTextString(out, s)
+        out.write(0x22)
+        for (c in s) out.write(c.code and 0xFF)
+        out.write(0)
     }
 
     /**

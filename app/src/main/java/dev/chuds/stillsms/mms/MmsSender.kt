@@ -64,7 +64,6 @@ object MmsSender {
             put(Telephony.Mms.MMS_VERSION, MmsVersion.V1_0)
             put(Telephony.Mms.CONTENT_TYPE, "application/vnd.wap.multipart.related")
             if (threadId > 0) put(Telephony.Mms.THREAD_ID, threadId)
-            if (!body.isNullOrBlank()) put(Telephony.Mms.SUBJECT, "")
         }
         val mmsUri = ctx.contentResolver.insert(Telephony.Mms.CONTENT_URI, mmsValues)
             ?: return@withContext null
@@ -104,7 +103,14 @@ object MmsSender {
 
         val pduFile = stagePduFile(ctx, pduBytes)
         val pduUri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", pduFile)
-        ctx.grantUriPermission("com.android.phone", pduUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        // The modem-side process is com.android.phone on AOSP / GrapheneOS, but some OEM
+        // forks (Samsung, Xiaomi) route MMS through com.android.mms.service. Grant both;
+        // the unused grant is a no-op when the package isn't installed.
+        for (target in listOf("com.android.phone", "com.android.mms.service")) {
+            runCatching {
+                ctx.grantUriPermission(target, pduUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        }
 
         // 5. Hand off to SmsManager. The sentIntent fires once the carrier handshake
         //    resolves (success or failure) — see MmsSentReceiver.

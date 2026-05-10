@@ -1,6 +1,7 @@
 package dev.chuds.stillsms.ui.thread
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -36,6 +37,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.chuds.stillsms.data.Direction
@@ -45,6 +48,7 @@ import dev.chuds.stillsms.data.TimeFormat
 import dev.chuds.stillsms.ui.components.StillDivider
 import dev.chuds.stillsms.ui.components.StillInitialDisc
 import dev.chuds.stillsms.ui.components.StillVerb
+import dev.chuds.stillsms.ui.components.rememberMmsImage
 import dev.chuds.stillsms.ui.theme.StillColors
 import dev.chuds.stillsms.ui.theme.StillTypography
 
@@ -202,6 +206,9 @@ private fun MessageRow(
     val bubbleShape = bubbleShape(outbound, item.isFirstOfGroup, item.isLastOfGroup)
     val borderColor = if (message.failed) StillColors.Gray else StillColors.Hairline
 
+    val bubbleMaxWidth = 320.dp
+    val maxWidthPx = with(LocalDensity.current) { bubbleMaxWidth.roundToPx() }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -210,7 +217,7 @@ private fun MessageRow(
     ) {
         Box(
             modifier = Modifier
-                .widthIn(max = 320.dp)
+                .widthIn(max = bubbleMaxWidth)
                 .clip(bubbleShape)
                 .border(1.dp, borderColor, bubbleShape)
                 .combinedClickable(
@@ -226,17 +233,37 @@ private fun MessageRow(
                 outbound -> StillColors.SoftWhite
                 else -> StillColors.MutedWhite
             }
-            if (message.body.isNotBlank()) {
-                Text(
-                    text = message.body,
-                    style = StillTypography.Body,
-                    color = textColor,
-                    textAlign = if (outbound) TextAlign.End else TextAlign.Start,
-                )
-            } else if (message.isMms && message.attachmentUri != null) {
-                Text(text = "[image]", style = StillTypography.Body, color = textColor)
-            } else {
-                Text(text = "·", style = StillTypography.Body, color = StillColors.DimGray)
+            // MMS image renders as a bitmap inside the bubble with the body text (if any)
+            // tucked underneath. Decoded off the main thread via produceState; while it's
+            // loading or if the part can't be opened, we fall back to a "[image]" caption.
+            val attachmentBitmap = if (message.isMms && message.attachmentUri != null) {
+                rememberMmsImage(message.attachmentUri, maxWidthPx)
+            } else null
+
+            Column(horizontalAlignment = align) {
+                if (attachmentBitmap != null) {
+                    Image(
+                        bitmap = attachmentBitmap,
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .widthIn(max = bubbleMaxWidth)
+                            .clip(RoundedCornerShape(12.dp)),
+                    )
+                } else if (message.isMms && message.attachmentUri != null) {
+                    Text(text = "[image]", style = StillTypography.Body, color = textColor)
+                }
+                if (message.body.isNotBlank()) {
+                    if (attachmentBitmap != null) Spacer(modifier = Modifier.padding(top = 6.dp))
+                    Text(
+                        text = message.body,
+                        style = StillTypography.Body,
+                        color = textColor,
+                        textAlign = if (outbound) TextAlign.End else TextAlign.Start,
+                    )
+                } else if (attachmentBitmap == null && (!message.isMms || message.attachmentUri == null)) {
+                    Text(text = "·", style = StillTypography.Body, color = StillColors.DimGray)
+                }
             }
         }
         if (item.showTimestamp) {

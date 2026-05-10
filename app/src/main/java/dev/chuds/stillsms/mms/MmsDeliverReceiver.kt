@@ -36,11 +36,15 @@ class MmsDeliverReceiver : BroadcastReceiver() {
         val downloadFile = File(dir, "${UUID.randomUUID()}.dat")
         downloadFile.createNewFile()
         val downloadUri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", downloadFile)
-        ctx.grantUriPermission(
-            "com.android.phone",
-            downloadUri,
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-        )
+        for (target in listOf("com.android.phone", "com.android.mms.service")) {
+            runCatching {
+                ctx.grantUriPermission(
+                    target,
+                    downloadUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+        }
 
         // Insert a placeholder MMS row so the thread list shows the inbound message
         // immediately. We'll fill in the parts and address from the carrier response.
@@ -66,9 +70,12 @@ class MmsDeliverReceiver : BroadcastReceiver() {
             putExtra(MmsDownloadReceiver.EXTRA_DOWNLOAD_FILE, downloadFile.absolutePath)
             putExtra(MmsDownloadReceiver.EXTRA_FROM, notif.from)
         }
+        // Don't naively .toInt() the row id — the inbox grows monotonically and a
+        // long-lived inbox will overflow Int. Hash the URI string instead so two
+        // inbound MMS in the same second still get distinct PendingIntent slots.
         val pi = PendingIntent.getBroadcast(
             ctx,
-            placeholderUri.lastPathSegment?.toIntOrNull() ?: 0,
+            placeholderUri.toString().hashCode(),
             downloadIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
         )

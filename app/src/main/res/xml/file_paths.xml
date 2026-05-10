@@ -1,4 +1,7 @@
-<!-- FileProvider mapping. The MMS send path stages PDU and image parts here, then hands a content:// URI to SmsManager.sendMultimediaMessage. -->
+<!-- FileProvider mapping. The MMS path stages PDU + image parts in cacheDir:
+     mms_outbox/ holds outbound M-Send.req PDUs we hand to SmsManager.sendMultimediaMessage;
+     mms_inbox/  holds inbound M-Retrieve.conf PDUs the modem writes via downloadMultimediaMessage. -->
 <paths>
     <cache-path name="mms_outbox" path="mms_outbox/" />
+    <cache-path name="mms_inbox" path="mms_inbox/" />
 </paths>
