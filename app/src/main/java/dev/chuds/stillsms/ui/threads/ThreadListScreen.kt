@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -133,12 +134,14 @@ fun ThreadListScreen(
             }
         }
 
-        // Footer compose verb
+        // Footer compose verb. navigationBarsPadding lifts the verb above the system
+        // gesture nav bar so it doesn't overlap the home pill / 3-button bar.
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .background(StillColors.OledBlack)
+                .navigationBarsPadding()
                 .padding(bottom = 16.dp, top = 8.dp),
         ) {
             StillVerb(
@@ -172,7 +175,10 @@ private fun ThreadRow(
             )
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        StillInitialDisc(thread.displayName ?: thread.address)
+        StillInitialDisc(
+            displayName = thread.displayName ?: thread.address,
+            photoUri = thread.photoUri,
+        )
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(

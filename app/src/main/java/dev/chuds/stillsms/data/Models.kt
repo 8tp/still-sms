@@ -24,6 +24,7 @@ data class Thread(
     val id: Long,
     val address: String,
     val displayName: String?,
+    val photoUri: String?,
     val snippet: String,
     val timestamp: Long,
     val read: Boolean,

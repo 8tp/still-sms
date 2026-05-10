@@ -224,10 +224,20 @@ fun StillSmsApp(
                         val messages by messagesFlow.collectAsState()
                         val thread = threads.firstOrNull { it.id == current.threadId }
                         val resolvedAddress = thread?.address?.takeIf { it.isNotBlank() } ?: current.address
+                        // For "new" conversations (no thread row yet) we still want a
+                        // name + photo if the address resolves to a contact.
+                        val liveInfo = remember(resolvedAddress) {
+                            if (thread == null && resolvedAddress.isNotBlank())
+                                contactResolver.lookup(resolvedAddress)
+                            else null
+                        }
+                        val resolvedDisplayName = thread?.displayName?.takeIf { it.isNotBlank() }
+                            ?: liveInfo?.displayName?.takeIf { it.isNotBlank() }
+                        val resolvedPhotoUri = thread?.photoUri ?: liveInfo?.photoUri
                         ThreadScreen(
-                            title = thread?.displayName?.takeIf { it.isNotBlank() }
-                                ?: resolvedAddress.ifBlank { "new" },
-                            subtitle = thread?.let { if (it.displayName.isNullOrBlank()) null else it.address },
+                            title = resolvedDisplayName ?: resolvedAddress.ifBlank { "new" },
+                            subtitle = resolvedDisplayName?.let { resolvedAddress.takeIf { it.isNotBlank() } },
+                            photoUri = resolvedPhotoUri,
                             messages = messages,
                             settings = settings,
                             canSend = isDefault && resolvedAddress.isNotBlank(),

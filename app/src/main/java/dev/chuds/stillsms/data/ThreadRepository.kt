@@ -171,10 +171,12 @@ class ThreadRepository(
                 val count = cursor.getInt(5)
                 val address = recipientAddress(recipientIds) ?: continue
                 if (address.isBlank()) continue
+                val info = contactResolver.lookup(address)
                 results += Thread(
                     id = id,
                     address = address,
-                    displayName = contactResolver.displayName(address),
+                    displayName = info.displayName,
+                    photoUri = info.photoUri,
                     snippet = snippet,
                     timestamp = date,
                     read = read,
