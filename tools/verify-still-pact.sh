@@ -139,7 +139,7 @@ def parse_manifest_permissions(path: Path):
         if not name_attr:
             continue
         local_tag = tag_name(element.tag)
-        if local_tag == "uses-permission":
+        if local_tag in {"uses-permission", "uses-permission-sdk-23", "uses-permission-sdk-m"}:
             requested.append(name_attr)
         elif local_tag == "permission":
             declared.append(name_attr)
@@ -162,13 +162,20 @@ def parse_application_id(path: Path):
     return match.group(1) if match else None
 
 
-def merged_debug_manifests():
+def source_manifests():
+    src = root / "app/src"
+    if not src.is_dir():
+        return []
+    return sorted(path for path in src.rglob("AndroidManifest.xml") if path.is_file())
+
+
+def merged_manifests():
     intermediates = root / "app/build/intermediates"
     if not intermediates.is_dir():
         return []
     patterns = [
-        "merged_manifest/debug/**/AndroidManifest.xml",
-        "merged_manifests/debug/**/AndroidManifest.xml",
+        "merged_manifest/**/AndroidManifest.xml",
+        "merged_manifests/**/AndroidManifest.xml",
     ]
     paths = []
     seen = set()
@@ -241,6 +248,35 @@ if manifest.is_file() and expected_permissions is not None:
             f"found {format_values(source_permissions)}"
         )
 
+    for source_manifest in source_manifests():
+        if source_manifest == manifest:
+            continue
+        try:
+            variant_permissions, variant_declarations = parse_manifest_permissions(
+                source_manifest
+            )
+        except ValueError as exc:
+            errors.append(f"{name}: {exc}")
+            continue
+
+        duplicate_variant = duplicates(variant_permissions)
+        if duplicate_variant:
+            errors.append(
+                f"{name}: {rel(source_manifest)} duplicate permissions: "
+                f"{format_values(duplicate_variant)}"
+            )
+        unexpected_variant = set(variant_permissions) - expected_permissions
+        if unexpected_variant:
+            errors.append(
+                f"{name}: {rel(source_manifest)} unexpected source permissions: "
+                f"{format_values(unexpected_variant)}"
+            )
+        if variant_declarations:
+            errors.append(
+                f"{name}: {rel(source_manifest)} unexpected permission declarations: "
+                f"{format_values(variant_declarations)}"
+            )
+
     manifest_count = len(source_permissions)
     stated_count = readme_permission_count(readme) if readme.is_file() else None
     if stated_count is None:
@@ -256,7 +292,7 @@ if manifest.is_file() and expected_permissions is not None:
             f"{application_id}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
         )
         allowed_merged_permissions = expected_permissions | {dynamic_permission}
-        for merged_manifest in merged_debug_manifests():
+        for merged_manifest in merged_manifests():
             try:
                 merged_permissions, declared_permissions = parse_manifest_permissions(
                     merged_manifest
