@@ -6,7 +6,9 @@ package dev.chuds.stillsms.data
  * The stored and incoming forms are canonicalized before matching. E.164 addresses
  * stay as `+digits`, national/short-code senders become digits only, and alphanumeric
  * sender IDs become uppercase. Matching remains an exact set lookup, so "+15551234567"
- * never blocks "+155512345678".
+ * never blocks "+155512345678". E.164 and bare-digit forms of the same number are
+ * treated as equivalent so a stored "+15551234567" still matches an inbound
+ * "15551234567" delivered without the leading "+", and vice versa.
  */
 internal object BlockListMatcher {
     private val e164 = Regex("^\\+[1-9]\\d{1,14}$")
@@ -36,6 +38,21 @@ internal object BlockListMatcher {
 
     fun isBlocked(blocked: Set<String>, rawAddress: String?): Boolean {
         val normalized = normalize(rawAddress) ?: return false
-        return blocked.contains(normalized)
+        if (blocked.contains(normalized)) return true
+        val alternate = numericEquivalent(normalized) ?: return false
+        return blocked.contains(alternate)
+    }
+
+    /**
+     * Return the other canonical form of a phone-number-shaped key so that the E.164
+     * "+digits" and bare-numeric forms of the same number resolve to a single match.
+     * Returns null for alphanumeric senders or for forms that cannot be the same number.
+     */
+    private fun numericEquivalent(canonical: String): String? = when {
+        canonical.startsWith("+") ->
+            canonical.removePrefix("+").takeIf { numericSender.matches(it) }
+        numericSender.matches(canonical) ->
+            "+$canonical".takeIf { e164.matches(it) }
+        else -> null
     }
 }

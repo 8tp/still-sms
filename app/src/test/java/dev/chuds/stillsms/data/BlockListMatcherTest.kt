@@ -43,4 +43,21 @@ class BlockListMatcherTest {
         assertFalse(BlockListMatcher.isBlocked(blocked, "BANK-ID2"))
         assertFalse(BlockListMatcher.isBlocked(blocked, "caller +15551234567"))
     }
+
+    @Test
+    fun isBlocked_treatsE164AndBareDigitsAsTheSameNumber() {
+        // Carriers sometimes deliver national-digit-only handles like "15551234567" without
+        // the leading "+". A stored E.164 entry must still match those, and vice versa.
+        val storedE164 = setOf("+15551234567")
+        assertTrue(BlockListMatcher.isBlocked(storedE164, "15551234567"))
+        assertTrue(BlockListMatcher.isBlocked(storedE164, "1 (555) 123-4567"))
+
+        val storedBare = setOf("15551234567")
+        assertTrue(BlockListMatcher.isBlocked(storedBare, "+15551234567"))
+        assertTrue(BlockListMatcher.isBlocked(storedBare, "+1 (555) 123-4567"))
+
+        // Different numbers must still not collide just because the equivalence checks both forms.
+        assertFalse(BlockListMatcher.isBlocked(storedE164, "+15551234568"))
+        assertFalse(BlockListMatcher.isBlocked(storedE164, "5551234567"))
+    }
 }
