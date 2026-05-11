@@ -9,8 +9,14 @@ import android.net.Uri
 import android.provider.Telephony
 import android.telephony.SmsManager
 import androidx.core.content.FileProvider
+import dev.chuds.stillsms.data.BlockListRepository
+import dev.chuds.stillsms.data.ContactNameResolver
+import dev.chuds.stillsms.data.PreferencesRepository
+import dev.chuds.stillsms.notif.NewMessageNotifier
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 
 /**
  * WAP_PUSH_DELIVER receiver. The system delivers inbound MMS notifications (M-Notification.ind
@@ -29,6 +35,38 @@ class MmsDeliverReceiver : BroadcastReceiver() {
 
         val notif = runCatching { MmsPduDecoder.parseNotificationInd(pdu) }.getOrNull() ?: return
         val location = notif.contentLocation ?: return
+        if (BlockListRepository(ctx).isBlocked(notif.from)) return
+
+        // Insert a placeholder MMS row immediately. We seed thread/address from the
+        // notification so download failures still render as inbound in the right thread.
+        val placeholderValues = ContentValues().apply {
+            put(Telephony.Mms.DATE, System.currentTimeMillis() / 1000)
+            put(Telephony.Mms.READ, 0)
+            put(Telephony.Mms.SEEN, 0)
+            put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_INBOX)
+            put(Telephony.Mms.MESSAGE_TYPE, MmsMessageType.M_RETRIEVE_CONF)
+            put(Telephony.Mms.MMS_VERSION, MmsVersion.V1_0)
+            put(Telephony.Mms.CONTENT_TYPE, "application/vnd.wap.multipart.related")
+            put(Telephony.Mms.SUBJECT, notif.subject ?: "")
+        }
+        val placeholderUri = ctx.contentResolver.insert(
+            Telephony.Mms.CONTENT_URI, placeholderValues,
+        ) ?: return
+        val threadId = seedInboundMmsAddress(ctx, placeholderUri, notif.from)
+
+        if (!mmsAutoDownloadOnMobile(ctx)) {
+            if (threadId > 0 && !notif.from.isNullOrBlank()) {
+                val sender = ContactNameResolver(ctx).displayName(notif.from) ?: notif.from
+                NewMessageNotifier.post(
+                    context = ctx,
+                    threadId = threadId,
+                    address = notif.from,
+                    sender = sender,
+                    preview = notif.subject?.takeIf { it.isNotBlank() } ?: "[mms]",
+                )
+            }
+            return
+        }
 
         // Stage a writable download target. We grant temporary read/write to com.android.phone
         // so the modem-side process can stream the carrier's M-Retrieve.conf into our file.
@@ -45,22 +83,6 @@ class MmsDeliverReceiver : BroadcastReceiver() {
                 )
             }
         }
-
-        // Insert a placeholder MMS row so the thread list shows the inbound message
-        // immediately. We'll fill in the parts and address from the carrier response.
-        val placeholderValues = ContentValues().apply {
-            put(Telephony.Mms.DATE, System.currentTimeMillis() / 1000)
-            put(Telephony.Mms.READ, 0)
-            put(Telephony.Mms.SEEN, 0)
-            put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_INBOX)
-            put(Telephony.Mms.MESSAGE_TYPE, MmsMessageType.M_RETRIEVE_CONF)
-            put(Telephony.Mms.MMS_VERSION, MmsVersion.V1_0)
-            put(Telephony.Mms.CONTENT_TYPE, "application/vnd.wap.multipart.related")
-            put(Telephony.Mms.SUBJECT, notif.subject ?: "")
-        }
-        val placeholderUri = ctx.contentResolver.insert(
-            Telephony.Mms.CONTENT_URI, placeholderValues,
-        ) ?: return
 
         // Hand off the download.
         val downloadIntent = Intent(ctx, MmsDownloadReceiver::class.java).apply {
@@ -92,4 +114,11 @@ class MmsDeliverReceiver : BroadcastReceiver() {
             SmsManager.getDefault()
         }
     }
+
+    private fun mmsAutoDownloadOnMobile(context: Context): Boolean =
+        runCatching {
+            runBlocking {
+                PreferencesRepository(context).settings.first().mmsAutoDownloadOnMobile
+            }
+        }.getOrDefault(true)
 }

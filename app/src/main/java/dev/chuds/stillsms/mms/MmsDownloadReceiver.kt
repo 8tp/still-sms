@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Telephony
+import dev.chuds.stillsms.data.BlockListRepository
 import dev.chuds.stillsms.data.ContactNameResolver
 import dev.chuds.stillsms.notif.NewMessageNotifier
 import java.io.File
@@ -42,24 +43,27 @@ class MmsDownloadReceiver : BroadcastReceiver() {
 
         val file = File(downloadPath)
         if (resultCode != Activity.RESULT_OK || !file.exists() || file.length() == 0L) {
-            markRetrieveFailed(ctx, placeholderUri)
+            markRetrieveFailed(ctx, placeholderUri, notifFrom)
             return
         }
 
         val pdu = runCatching { file.readBytes() }.getOrNull() ?: run {
-            markRetrieveFailed(ctx, placeholderUri); return
+            markRetrieveFailed(ctx, placeholderUri, notifFrom); return
         }
         val parsed = runCatching { MmsPduDecoder.parseRetrieveConf(pdu) }.getOrNull() ?: run {
-            markRetrieveFailed(ctx, placeholderUri); return
+            markRetrieveFailed(ctx, placeholderUri, notifFrom); return
         }
 
         val mmsId = ContentUris.parseId(placeholderUri)
         val from = parsed.from ?: notifFrom
+        if (BlockListRepository(ctx).isBlocked(from)) {
+            runCatching { ctx.contentResolver.delete(placeholderUri, null, null) }
+            runCatching { file.delete() }
+            return
+        }
 
         // Update the placeholder with the address-derived thread id and subject.
-        val threadId = if (!from.isNullOrBlank())
-            runCatching { Telephony.Threads.getOrCreateThreadId(ctx, from) }.getOrDefault(-1L)
-        else -1L
+        val threadId = seedInboundMmsAddress(ctx, placeholderUri, from)
 
         ctx.contentResolver.update(
             placeholderUri,
@@ -69,19 +73,6 @@ class MmsDownloadReceiver : BroadcastReceiver() {
             },
             null, null,
         )
-
-        // Insert FROM address row.
-        if (!from.isNullOrBlank()) {
-            ctx.contentResolver.insert(
-                Uri.parse("content://mms/$mmsId/addr"),
-                ContentValues().apply {
-                    put("address", from)
-                    put("type", 137)            // PduHeaders.FROM
-                    put("charset", 106)
-                    put("msg_id", mmsId)
-                },
-            )
-        }
 
         // Walk parts. SMIL is metadata; everything else is real content.
         var snippet: String? = null
@@ -133,12 +124,13 @@ class MmsDownloadReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun markRetrieveFailed(context: Context, placeholderUri: Uri) {
+    private fun markRetrieveFailed(context: Context, placeholderUri: Uri, from: String?) {
         runCatching {
+            seedInboundMmsAddress(context, placeholderUri, from)
             context.contentResolver.update(
                 placeholderUri,
                 ContentValues().apply {
-                    put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_FAILED)
+                    put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_INBOX)
                 },
                 null, null,
             )
