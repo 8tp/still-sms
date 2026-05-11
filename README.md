@@ -4,6 +4,8 @@
 
 #### A monochrome SMS / MMS app that doesn't phone home.
 
+part of the [still](../STILL.md) family. the pact governs every line of code in this repo.
+
 <br>
 
 <img src="docs/screenshots/list.png" width="180" alt="Thread list — initials disc, sender name, snippet, monospace timestamp">&nbsp;<img src="docs/screenshots/thread.png" width="180" alt="Thread — chat-bubble grouping with hairline outlines, no fill, no ripple">&nbsp;<img src="docs/screenshots/settings.png" width="180" alt="Settings — single-scroll, eight rows, lowercase verbs">&nbsp;<img src="docs/screenshots/blocklist.png" width="180" alt="Block list — add via verb, remove via long-press">
