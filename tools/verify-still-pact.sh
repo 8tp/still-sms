@@ -146,6 +146,14 @@ def parse_manifest_permissions(path: Path):
     return requested, declared
 
 
+def manifest_has_queries(path: Path):
+    try:
+        root_element = ET.parse(path).getroot()
+    except ET.ParseError as exc:
+        raise ValueError(f"{rel(path)} is not valid XML: {exc}") from exc
+    return any(tag_name(element.tag) == "queries" for element in root_element.iter())
+
+
 def duplicates(values):
     return sorted(value for value, count in Counter(values).items() if count > 1)
 
@@ -269,6 +277,8 @@ if application_id is None:
 if manifest.is_file() and expected_permissions is not None:
     try:
         source_permissions, _source_declarations = parse_manifest_permissions(manifest)
+        if manifest_has_queries(manifest):
+            errors.append(f"{name}: source manifest has unexpected <queries> block")
     except ValueError as exc:
         errors.append(f"{name}: {exc}")
         source_permissions = []
@@ -300,6 +310,10 @@ if manifest.is_file() and expected_permissions is not None:
             variant_permissions, variant_declarations = parse_manifest_permissions(
                 source_manifest
             )
+            if manifest_has_queries(source_manifest):
+                errors.append(
+                    f"{name}: {rel(source_manifest)} has unexpected <queries> block"
+                )
         except ValueError as exc:
             errors.append(f"{name}: {exc}")
             continue
@@ -357,6 +371,10 @@ if manifest.is_file() and expected_permissions is not None:
                 merged_permissions, declared_permissions = parse_manifest_permissions(
                     merged_manifest
                 )
+                if manifest_has_queries(merged_manifest):
+                    errors.append(
+                        f"{name}: {rel(merged_manifest)} has unexpected <queries> block"
+                    )
             except ValueError as exc:
                 errors.append(f"{name}: {exc}")
                 continue

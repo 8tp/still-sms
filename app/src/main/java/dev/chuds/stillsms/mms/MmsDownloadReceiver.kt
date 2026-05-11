@@ -67,55 +67,62 @@ class MmsDownloadReceiver : BroadcastReceiver() {
             return
         }
 
-        // Update the placeholder with the address-derived thread id and subject.
-        val threadId = seedInboundMmsAddress(ctx, placeholderUri, from)
-
-        ctx.contentResolver.update(
-            placeholderUri,
-            ContentValues().apply {
-                if (threadId > 0) put(Telephony.Mms.THREAD_ID, threadId)
-                if (!parsed.subject.isNullOrBlank()) put(Telephony.Mms.SUBJECT, parsed.subject)
-            },
-            null, null,
-        )
-
-        // Walk parts. SMIL is metadata; everything else is real content.
+        var threadId = -1L
         var snippet: String? = null
-        for (part in parsed.parts) {
-            val ct = part.contentType
-            val ext = when {
-                ct.equals("image/jpeg", true) -> "jpg"
-                ct.equals("image/png", true) -> "png"
-                ct.equals("image/gif", true) -> "gif"
-                ct.equals("text/plain", true) -> "txt"
-                else -> "bin"
-            }
-            val partValues = ContentValues().apply {
-                put(Telephony.Mms.Part.MSG_ID, mmsId)
-                put(Telephony.Mms.Part.CONTENT_TYPE, ct)
-                if (part.contentId != null) put(Telephony.Mms.Part.CONTENT_ID, "<${part.contentId}>")
-                put(Telephony.Mms.Part.CONTENT_LOCATION, part.contentLocation ?: ("part.$ext"))
-                if (ct.equals("text/plain", true)) {
-                    val text = String(part.data, Charsets.UTF_8)
-                    put(Telephony.Mms.Part.CHARSET, 106)
-                    put(Telephony.Mms.Part.TEXT, text)
-                    if (snippet == null) snippet = text
-                }
-                if (part.name != null) put(Telephony.Mms.Part.NAME, part.name)
-            }
-            val partUri = ctx.contentResolver.insert(
-                Uri.parse("content://mms/$mmsId/part"), partValues,
-            ) ?: continue
-            // Binary bodies need to be streamed to the part's openOutputStream.
-            if (!ct.equals("text/plain", true)) {
-                runCatching {
-                    ctx.contentResolver.openOutputStream(partUri)?.use { it.write(part.data) }
-                }
-            }
-        }
 
-        // Done — clean up the staging file. Best-effort; harmless if it fails.
-        runCatching { file.delete() }
+        try {
+            // Update the placeholder with the address-derived thread id and subject.
+            threadId = seedInboundMmsAddress(ctx, placeholderUri, from)
+            val updated = ctx.contentResolver.update(
+                placeholderUri,
+                ContentValues().apply {
+                    if (threadId > 0) put(Telephony.Mms.THREAD_ID, threadId)
+                    if (!parsed.subject.isNullOrBlank()) put(Telephony.Mms.SUBJECT, parsed.subject)
+                },
+                null, null,
+            )
+            if (updated <= 0) error("MMS placeholder no longer exists")
+
+            // Walk parts. SMIL is metadata; everything else is real content.
+            for (part in parsed.parts) {
+                val ct = part.contentType
+                val ext = when {
+                    ct.equals("image/jpeg", true) -> "jpg"
+                    ct.equals("image/png", true) -> "png"
+                    ct.equals("image/gif", true) -> "gif"
+                    ct.equals("text/plain", true) -> "txt"
+                    else -> "bin"
+                }
+                val partValues = ContentValues().apply {
+                    put(Telephony.Mms.Part.MSG_ID, mmsId)
+                    put(Telephony.Mms.Part.CONTENT_TYPE, ct)
+                    if (part.contentId != null) put(Telephony.Mms.Part.CONTENT_ID, "<${part.contentId}>")
+                    put(Telephony.Mms.Part.CONTENT_LOCATION, part.contentLocation ?: ("part.$ext"))
+                    if (ct.equals("text/plain", true)) {
+                        val text = String(part.data, Charsets.UTF_8)
+                        put(Telephony.Mms.Part.CHARSET, 106)
+                        put(Telephony.Mms.Part.TEXT, text)
+                        if (snippet == null) snippet = text
+                    }
+                    if (part.name != null) put(Telephony.Mms.Part.NAME, part.name)
+                }
+                val partUri = ctx.contentResolver.insert(
+                    Uri.parse("content://mms/$mmsId/part"), partValues,
+                ) ?: error("MMS part insert failed")
+                // Binary bodies need to be streamed to the part's openOutputStream.
+                if (!ct.equals("text/plain", true)) {
+                    val stream = ctx.contentResolver.openOutputStream(partUri)
+                        ?: error("MMS part stream unavailable")
+                    stream.use { it.write(part.data) }
+                }
+            }
+        } catch (_: Exception) {
+            markRetrieveFailed(ctx, placeholderUri, from)
+            return
+        } finally {
+            // Done — clean up the staging file. Best-effort; harmless if it fails.
+            runCatching { file.delete() }
+        }
 
         if (!from.isNullOrBlank()) {
             val sender = ContactNameResolver(ctx).displayName(from) ?: from

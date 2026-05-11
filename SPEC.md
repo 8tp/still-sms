@@ -279,7 +279,7 @@ phone-number normalization lib; we lift Android's `PhoneNumberUtils`
 - **0.1** — read-only thread list and thread view. No sending. Shipping path:
   default-SMS role works (system delivers to our receivers); we just render.
 - **0.2** — outgoing SMS (1:1, text-only). Notifications + reply.
-- **0.3** — outgoing 1:1 MMS (image). Inbound MMS. Carrier gauntlet.
+- **0.3** — outgoing 1:1 MMS (image). Inbound MMS scaffolding.
 - **0.4** — block list, export. Settings page.
 - **0.5** — group MMS behind toggle. Search.
 - **1.0** — gauntlet pass across the four major US carriers + two EU.

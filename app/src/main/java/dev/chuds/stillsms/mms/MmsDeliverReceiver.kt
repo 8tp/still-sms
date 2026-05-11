@@ -30,6 +30,8 @@ import kotlinx.coroutines.runBlocking
  */
 class MmsDeliverReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != Telephony.Sms.Intents.WAP_PUSH_DELIVER_ACTION) return
+
         val pdu = intent.getByteArrayExtra("data") ?: return
         val ctx = context.applicationContext
 
@@ -70,10 +72,12 @@ class MmsDeliverReceiver : BroadcastReceiver() {
 
         // Stage a writable download target. We grant temporary read/write to com.android.phone
         // so the modem-side process can stream the carrier's M-Retrieve.conf into our file.
+        var stagedFile: File? = null
         val (downloadFile, downloadUri) = runCatching {
             val dir = File(ctx.cacheDir, "mms_inbox").apply { mkdirs() }
             val file = File(dir, "${UUID.randomUUID()}.dat")
             file.createNewFile()
+            stagedFile = file
             val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
             for (target in listOf("com.android.phone", "com.android.mms.service")) {
                 runCatching {
@@ -87,6 +91,7 @@ class MmsDeliverReceiver : BroadcastReceiver() {
             file to uri
         }.getOrElse {
             markInboundMmsRetrieveFailed(ctx, placeholderUri, notif.from)
+            runCatching { stagedFile?.delete() }
             return
         }
 
