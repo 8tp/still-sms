@@ -114,7 +114,7 @@ object MmsSender {
             }
             val pi = PendingIntent.getBroadcast(
                 ctx,
-                mmsUri.toString().hashCode(),
+                MmsPendingIntents.nextRequestCodeBlocking(ctx),
                 sentIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
             )

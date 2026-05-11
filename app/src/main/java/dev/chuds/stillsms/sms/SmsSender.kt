@@ -28,6 +28,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Telephony
 import android.telephony.SmsManager
+import dev.chuds.stillsms.mms.MmsPendingIntents
 
 object SmsSender {
 
@@ -67,6 +68,7 @@ object SmsSender {
         runCatching {
             val sm = smsManager(ctx)
             val parts = sm.divideMessage(body)
+            val baseRequestCode = MmsPendingIntents.reserveBlockBlocking(ctx, parts.size)
             val sentIntents = ArrayList<PendingIntent>(parts.size)
             for (i in parts.indices) {
                 val intent = Intent(ctx, SmsSentReceiver::class.java).apply {
@@ -78,7 +80,7 @@ object SmsSender {
                 }
                 sentIntents += PendingIntent.getBroadcast(
                     ctx,
-                    uri.toString().hashCode() * 31 + i,
+                    baseRequestCode + i,
                     intent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 )
