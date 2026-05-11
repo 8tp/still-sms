@@ -131,6 +131,26 @@ class MmsDownloadReceiver : BroadcastReceiver() {
 
     private fun markRetrieveFailed(context: Context, placeholderUri: Uri, from: String?) {
         markInboundMmsRetrieveFailed(context, placeholderUri, from)
+        notifyRetrieveFailed(context, placeholderUri, from)
+    }
+
+    private fun notifyRetrieveFailed(context: Context, placeholderUri: Uri, from: String?) {
+        if (from.isNullOrBlank()) return
+        // Use the placeholder row's THREAD_ID if seeded; fall back to deriving it from
+        // the address so the notification still taps through somewhere sensible.
+        val threadId = runCatching {
+            android.provider.Telephony.Threads.getOrCreateThreadId(context, from)
+        }.getOrDefault(-1L)
+        if (threadId <= 0) return
+        val sender = ContactNameResolver(context).displayName(from) ?: from
+        // NewMessageNotifier.post is a no-op when POST_NOTIFICATIONS is denied (Android 13+).
+        NewMessageNotifier.post(
+            context = context,
+            threadId = threadId,
+            address = from,
+            sender = sender,
+            preview = "couldn't download MMS",
+        )
     }
 }
 
