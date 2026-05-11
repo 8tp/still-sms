@@ -12,6 +12,7 @@ import dev.chuds.stillsms.data.BlockListRepository
 import dev.chuds.stillsms.data.ContactNameResolver
 import dev.chuds.stillsms.notif.NewMessageNotifier
 import java.io.File
+import java.io.OutputStream
 
 /**
  * downloadedIntent target for SmsManager.downloadMultimediaMessage(). Once the carrier
@@ -69,7 +70,6 @@ class MmsDownloadReceiver : BroadcastReceiver() {
 
         var threadId = -1L
         var snippet: String? = null
-
         try {
             // Update the placeholder with the address-derived thread id and subject.
             threadId = seedInboundMmsAddress(ctx, placeholderUri, from)
@@ -83,39 +83,10 @@ class MmsDownloadReceiver : BroadcastReceiver() {
             )
             if (updated <= 0) error("MMS placeholder no longer exists")
 
-            // Walk parts. SMIL is metadata; everything else is real content.
-            for (part in parsed.parts) {
-                val ct = part.contentType
-                val ext = when {
-                    ct.equals("image/jpeg", true) -> "jpg"
-                    ct.equals("image/png", true) -> "png"
-                    ct.equals("image/gif", true) -> "gif"
-                    ct.equals("text/plain", true) -> "txt"
-                    else -> "bin"
-                }
-                val partValues = ContentValues().apply {
-                    put(Telephony.Mms.Part.MSG_ID, mmsId)
-                    put(Telephony.Mms.Part.CONTENT_TYPE, ct)
-                    if (part.contentId != null) put(Telephony.Mms.Part.CONTENT_ID, "<${part.contentId}>")
-                    put(Telephony.Mms.Part.CONTENT_LOCATION, part.contentLocation ?: ("part.$ext"))
-                    if (ct.equals("text/plain", true)) {
-                        val text = String(part.data, Charsets.UTF_8)
-                        put(Telephony.Mms.Part.CHARSET, 106)
-                        put(Telephony.Mms.Part.TEXT, text)
-                        if (snippet == null) snippet = text
-                    }
-                    if (part.name != null) put(Telephony.Mms.Part.NAME, part.name)
-                }
-                val partUri = ctx.contentResolver.insert(
-                    Uri.parse("content://mms/$mmsId/part"), partValues,
-                ) ?: error("MMS part insert failed")
-                // Binary bodies need to be streamed to the part's openOutputStream.
-                if (!ct.equals("text/plain", true)) {
-                    val stream = ctx.contentResolver.openOutputStream(partUri)
-                        ?: error("MMS part stream unavailable")
-                    stream.use { it.write(part.data) }
-                }
-            }
+            snippet = persistMmsParts(
+                parsed.parts,
+                ContentResolverMmsPartSink(ctx, mmsId),
+            )
         } catch (_: Exception) {
             markRetrieveFailed(ctx, placeholderUri, from)
             return
@@ -124,19 +95,120 @@ class MmsDownloadReceiver : BroadcastReceiver() {
             runCatching { file.delete() }
         }
 
-        if (!from.isNullOrBlank()) {
-            val sender = ContactNameResolver(ctx).displayName(from) ?: from
-            NewMessageNotifier.post(
-                context = ctx,
-                threadId = if (threadId > 0) threadId else mmsId,
-                address = from,
-                sender = sender,
-                preview = snippet ?: "[image]",
-            )
-        }
+        notifyInboundMms(ctx, from, threadId, mmsId, snippet)
+    }
+
+    private fun notifyInboundMms(
+        context: Context,
+        from: String?,
+        threadId: Long,
+        mmsId: Long,
+        snippet: String?,
+    ) {
+        if (from.isNullOrBlank()) return
+        val sender = ContactNameResolver(context).displayName(from) ?: from
+        NewMessageNotifier.post(
+            context = context,
+            threadId = if (threadId > 0) threadId else mmsId,
+            address = from,
+            sender = sender,
+            preview = snippet ?: "[image]",
+        )
     }
 
     private fun markRetrieveFailed(context: Context, placeholderUri: Uri, from: String?) {
         markInboundMmsRetrieveFailed(context, placeholderUri, from)
+    }
+}
+
+internal data class MmsProviderPart(
+    val contentType: String,
+    val contentId: String?,
+    val contentLocation: String,
+    val name: String?,
+    val text: String?,
+    val binaryData: ByteArray?,
+)
+
+internal interface MmsPartSink<PartId> {
+    fun insert(part: MmsProviderPart): PartId?
+    fun openOutputStream(partId: PartId): OutputStream?
+    fun delete(partId: PartId)
+}
+
+internal fun <PartId> persistMmsParts(
+    parts: List<MmsPduDecoder.RetrievePart>,
+    sink: MmsPartSink<PartId>,
+): String? {
+    val inserted = mutableListOf<PartId>()
+    var snippet: String? = null
+    try {
+        for (part in parts) {
+            val providerPart = part.toProviderPart()
+            val partId = sink.insert(providerPart) ?: error("MMS part insert failed")
+            inserted += partId
+            providerPart.binaryData?.let { data ->
+                val stream = sink.openOutputStream(partId) ?: error("MMS part stream unavailable")
+                stream.use { it.write(data) }
+            }
+            if (snippet == null && providerPart.text != null) snippet = providerPart.text
+        }
+        return snippet
+    } catch (e: Exception) {
+        inserted.asReversed().forEach { partId ->
+            runCatching { sink.delete(partId) }
+        }
+        throw e
+    }
+}
+
+private fun MmsPduDecoder.RetrievePart.toProviderPart(): MmsProviderPart {
+    val ext = when {
+        contentType.equals("image/jpeg", true) -> "jpg"
+        contentType.equals("image/png", true) -> "png"
+        contentType.equals("image/gif", true) -> "gif"
+        contentType.equals("text/plain", true) -> "txt"
+        else -> "bin"
+    }
+    val text = if (contentType.equals("text/plain", true)) {
+        String(data, Charsets.UTF_8)
+    } else {
+        null
+    }
+    return MmsProviderPart(
+        contentType = contentType,
+        contentId = contentId,
+        contentLocation = contentLocation ?: "part.$ext",
+        name = name,
+        text = text,
+        binaryData = if (text == null) data else null,
+    )
+}
+
+private class ContentResolverMmsPartSink(
+    private val context: Context,
+    private val mmsId: Long,
+) : MmsPartSink<Uri> {
+    override fun insert(part: MmsProviderPart): Uri? =
+        context.contentResolver.insert(
+            Uri.parse("content://mms/$mmsId/part"),
+            ContentValues().apply {
+                put(Telephony.Mms.Part.MSG_ID, mmsId)
+                put(Telephony.Mms.Part.CONTENT_TYPE, part.contentType)
+                if (part.contentId != null) put(Telephony.Mms.Part.CONTENT_ID, "<${part.contentId}>")
+                put(Telephony.Mms.Part.CONTENT_LOCATION, part.contentLocation)
+                if (part.text != null) {
+                    put(Telephony.Mms.Part.CHARSET, 106)
+                    put(Telephony.Mms.Part.TEXT, part.text)
+                }
+                if (part.name != null) put(Telephony.Mms.Part.NAME, part.name)
+            },
+        )
+
+    override fun openOutputStream(partId: Uri): OutputStream? =
+        context.contentResolver.openOutputStream(partId)
+
+    override fun delete(partId: Uri) {
+        context.contentResolver.delete(partId, null, null)
     }
 }
