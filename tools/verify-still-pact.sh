@@ -4,25 +4,49 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 python3 - "$root" <<'PY'
+from collections import Counter
+import os
 import re
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 root = Path(sys.argv[1])
 name = root.name
 manifest = root / "app/src/main/AndroidManifest.xml"
-gradle = root / "app/build.gradle.kts"
+app_gradle = root / "app/build.gradle.kts"
 readme = root / "README.md"
 
-manifest_forbidden = [
-    "android.permission.INTERNET",
-    "ACCESS_NETWORK_STATE",
-    "ACCESS_WIFI_STATE",
-    "QUERY_ALL_PACKAGES",
-    "READ_EXTERNAL_STORAGE",
-    "WRITE_EXTERNAL_STORAGE",
-    "MANAGE_EXTERNAL_STORAGE",
-]
+expected_permissions_by_repo = {
+    "still-contacts": {
+        "android.permission.READ_CONTACTS",
+        "android.permission.WRITE_CONTACTS",
+    },
+    "still-dialer": {
+        "android.permission.CALL_PHONE",
+        "android.permission.READ_CALL_LOG",
+        "android.permission.READ_CONTACTS",
+        "android.permission.READ_PHONE_STATE",
+        "android.permission.MANAGE_OWN_CALLS",
+        "android.permission.ANSWER_PHONE_CALLS",
+        "android.permission.POST_NOTIFICATIONS",
+    },
+    "still-sms": {
+        "android.permission.SEND_SMS",
+        "android.permission.READ_SMS",
+        "android.permission.RECEIVE_SMS",
+        "android.permission.RECEIVE_MMS",
+        "android.permission.RECEIVE_WAP_PUSH",
+        "android.permission.READ_CONTACTS",
+        "android.permission.POST_NOTIFICATIONS",
+    },
+    "still-voice": {
+        "android.permission.RECORD_AUDIO",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+        "android.permission.POST_NOTIFICATIONS",
+    },
+}
 gradle_forbidden = [
     "com.google.firebase",
     "com.google.android.gms",
@@ -31,6 +55,16 @@ gradle_forbidden = [
     "mixpanel",
     "amplitude",
 ]
+gradle_file_names = {
+    "build.gradle",
+    "build.gradle.kts",
+    "settings.gradle",
+    "settings.gradle.kts",
+    "gradle.properties",
+    "libs.versions.toml",
+}
+skip_dirs = {".git", ".gradle", "build"}
+android_name = "{http://schemas.android.com/apk/res/android}name"
 number_words = {
     "no": 0,
     "zero": 0,
@@ -47,13 +81,104 @@ number_words = {
 }
 
 
-def strip_xml_comments(text: str) -> str:
-    return re.sub(r"<!--.*?-->", "", text, flags=re.S)
+def rel(path: Path) -> str:
+    return path.relative_to(root).as_posix()
 
 
-def strip_kotlin_comments(text: str) -> str:
+def tag_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def strip_gradle_comments(path: Path, text: str) -> str:
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-    return "\n".join(line.split("//", 1)[0] for line in text.splitlines())
+    stripped_lines = []
+    for raw_line in text.splitlines():
+        line = raw_line.lstrip()
+        if path.suffix == ".toml":
+            stripped_lines.append(raw_line.split("#", 1)[0])
+        elif path.name.endswith(".properties"):
+            if line.startswith("#") or line.startswith("!"):
+                stripped_lines.append("")
+            else:
+                stripped_lines.append(raw_line.split("#", 1)[0].split("!", 1)[0])
+        else:
+            stripped_lines.append(raw_line.split("//", 1)[0])
+    return "\n".join(stripped_lines)
+
+
+def is_gradle_settings_or_catalog_file(path: Path) -> bool:
+    if path.name in gradle_file_names:
+        return True
+    if path.name.endswith(".gradle") or path.name.endswith(".gradle.kts"):
+        return True
+    if path.name.endswith(".versions.toml"):
+        return True
+    return path.suffix == ".toml" and "gradle" in path.relative_to(root).parts
+
+
+def iter_gradle_settings_or_catalog_files():
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [dirname for dirname in dirnames if dirname not in skip_dirs]
+        current = Path(dirpath)
+        for filename in filenames:
+            path = current / filename
+            if is_gradle_settings_or_catalog_file(path):
+                yield path
+
+
+def parse_manifest_permissions(path: Path):
+    try:
+        root_element = ET.parse(path).getroot()
+    except ET.ParseError as exc:
+        raise ValueError(f"{rel(path)} is not valid XML: {exc}") from exc
+
+    requested = []
+    declared = []
+    for element in root_element.iter():
+        name_attr = element.attrib.get(android_name) or element.attrib.get("name")
+        if not name_attr:
+            continue
+        local_tag = tag_name(element.tag)
+        if local_tag == "uses-permission":
+            requested.append(name_attr)
+        elif local_tag == "permission":
+            declared.append(name_attr)
+    return requested, declared
+
+
+def duplicates(values):
+    return sorted(value for value, count in Counter(values).items() if count > 1)
+
+
+def format_values(values) -> str:
+    return ", ".join(sorted(values)) if values else "(none)"
+
+
+def parse_application_id(path: Path):
+    if not path.is_file():
+        return None
+    text = strip_gradle_comments(path, path.read_text(encoding="utf-8"))
+    match = re.search(r"\bapplicationId\s*=\s*[\"']([^\"']+)[\"']", text)
+    return match.group(1) if match else None
+
+
+def merged_debug_manifests():
+    intermediates = root / "app/build/intermediates"
+    if not intermediates.is_dir():
+        return []
+    patterns = [
+        "merged_manifest/debug/**/AndroidManifest.xml",
+        "merged_manifests/debug/**/AndroidManifest.xml",
+    ]
+    paths = []
+    seen = set()
+    for pattern in patterns:
+        for path in intermediates.glob(pattern):
+            resolved = path.resolve()
+            if path.is_file() and resolved not in seen:
+                seen.add(resolved)
+                paths.append(path)
+    return sorted(paths)
 
 
 def readme_permission_count(path: Path):
@@ -77,17 +202,46 @@ def readme_permission_count(path: Path):
 
 
 errors = []
+expected_permissions = expected_permissions_by_repo.get(name)
+if expected_permissions is None:
+    errors.append(f"{name}: no permission allowlist configured")
+
 for required in (manifest, readme):
     if not required.is_file():
-        errors.append(f"{name}: missing {required.relative_to(root)}")
+        errors.append(f"{name}: missing {rel(required)}")
 
-if manifest.is_file():
-    manifest_text = strip_xml_comments(manifest.read_text(encoding="utf-8"))
-    for token in manifest_forbidden:
-        if token in manifest_text:
-            errors.append(f"{name}: forbidden manifest token: {token}")
+application_id = parse_application_id(app_gradle)
+if application_id is None:
+    errors.append(f"{name}: could not find applicationId in {rel(app_gradle)}")
 
-    manifest_count = len(re.findall(r"<uses-permission\b", manifest_text))
+if manifest.is_file() and expected_permissions is not None:
+    try:
+        source_permissions, _source_declarations = parse_manifest_permissions(manifest)
+    except ValueError as exc:
+        errors.append(f"{name}: {exc}")
+        source_permissions = []
+
+    source_set = set(source_permissions)
+    duplicate_permissions = duplicates(source_permissions)
+    if duplicate_permissions:
+        errors.append(
+            f"{name}: duplicate source permissions: {format_values(duplicate_permissions)}"
+        )
+    unexpected = source_set - expected_permissions
+    missing = expected_permissions - source_set
+    if unexpected:
+        errors.append(
+            f"{name}: unexpected source permissions: {format_values(unexpected)}"
+        )
+    if missing:
+        errors.append(f"{name}: missing source permissions: {format_values(missing)}")
+    if not unexpected and not missing and len(source_permissions) != len(expected_permissions):
+        errors.append(
+            f"{name}: source permissions must match allowlist exactly; "
+            f"found {format_values(source_permissions)}"
+        )
+
+    manifest_count = len(source_permissions)
     stated_count = readme_permission_count(readme) if readme.is_file() else None
     if stated_count is None:
         errors.append(f"{name}: could not find stated README permission count")
@@ -97,11 +251,52 @@ if manifest.is_file():
             f"manifest declares {manifest_count}"
         )
 
-if gradle.is_file():
-    gradle_text = strip_kotlin_comments(gradle.read_text(encoding="utf-8"))
+    if application_id is not None:
+        dynamic_permission = (
+            f"{application_id}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        )
+        allowed_merged_permissions = expected_permissions | {dynamic_permission}
+        for merged_manifest in merged_debug_manifests():
+            try:
+                merged_permissions, declared_permissions = parse_manifest_permissions(
+                    merged_manifest
+                )
+            except ValueError as exc:
+                errors.append(f"{name}: {exc}")
+                continue
+            merged_set = set(merged_permissions)
+            duplicate_merged = duplicates(merged_permissions)
+            if duplicate_merged:
+                errors.append(
+                    f"{name}: {rel(merged_manifest)} duplicates permissions: "
+                    f"{format_values(duplicate_merged)}"
+                )
+            missing_merged = expected_permissions - merged_set
+            unexpected_merged = merged_set - allowed_merged_permissions
+            unexpected_declarations = set(declared_permissions) - {dynamic_permission}
+            if missing_merged:
+                errors.append(
+                    f"{name}: {rel(merged_manifest)} missing source permissions after merge: "
+                    f"{format_values(missing_merged)}"
+                )
+            if unexpected_merged:
+                errors.append(
+                    f"{name}: {rel(merged_manifest)} has unexpected merged permissions: "
+                    f"{format_values(unexpected_merged)}"
+                )
+            if unexpected_declarations:
+                errors.append(
+                    f"{name}: {rel(merged_manifest)} has unexpected permission declarations: "
+                    f"{format_values(unexpected_declarations)}"
+                )
+
+for gradle_file in iter_gradle_settings_or_catalog_files():
+    gradle_text = strip_gradle_comments(
+        gradle_file, gradle_file.read_text(encoding="utf-8")
+    ).casefold()
     for token in gradle_forbidden:
-        if token in gradle_text:
-            errors.append(f"{name}: forbidden gradle token: {token}")
+        if token.casefold() in gradle_text:
+            errors.append(f"{name}: forbidden gradle token in {rel(gradle_file)}: {token}")
 
 if errors:
     for error in errors:
