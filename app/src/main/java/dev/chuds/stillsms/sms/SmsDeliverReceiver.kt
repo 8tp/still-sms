@@ -9,8 +9,8 @@ package dev.chuds.stillsms.sms
  * That responsibility is ours — failure to insert means inbound SMS silently vanishes.
  *
  * Block-list filter happens BEFORE the provider write so that blocked messages leave
- * no trace at all (no row, no notification). Matched on the contact-resolver-normalized
- * E.164 form to match what the user typed in the BlockListScreen.
+ * no trace at all (no row, no notification). Matched on exact canonical sender keys:
+ * strict E.164, national/short-code digits, and alphanumeric sender IDs.
  */
 
 import android.content.BroadcastReceiver

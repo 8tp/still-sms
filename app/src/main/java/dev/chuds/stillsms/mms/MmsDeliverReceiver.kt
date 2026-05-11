@@ -70,18 +70,24 @@ class MmsDeliverReceiver : BroadcastReceiver() {
 
         // Stage a writable download target. We grant temporary read/write to com.android.phone
         // so the modem-side process can stream the carrier's M-Retrieve.conf into our file.
-        val dir = File(ctx.cacheDir, "mms_inbox").apply { mkdirs() }
-        val downloadFile = File(dir, "${UUID.randomUUID()}.dat")
-        downloadFile.createNewFile()
-        val downloadUri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", downloadFile)
-        for (target in listOf("com.android.phone", "com.android.mms.service")) {
-            runCatching {
-                ctx.grantUriPermission(
-                    target,
-                    downloadUri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-                )
+        val (downloadFile, downloadUri) = runCatching {
+            val dir = File(ctx.cacheDir, "mms_inbox").apply { mkdirs() }
+            val file = File(dir, "${UUID.randomUUID()}.dat")
+            file.createNewFile()
+            val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
+            for (target in listOf("com.android.phone", "com.android.mms.service")) {
+                runCatching {
+                    ctx.grantUriPermission(
+                        target,
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                    )
+                }
             }
+            file to uri
+        }.getOrElse {
+            markInboundMmsRetrieveFailed(ctx, placeholderUri, notif.from)
+            return
         }
 
         // Hand off the download.

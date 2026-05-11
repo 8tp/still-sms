@@ -188,9 +188,23 @@ def merged_manifests():
     return sorted(paths)
 
 
-def latest_input_mtime():
-    paths = source_manifests()
+def latest_mtime(paths):
     return max((path.stat().st_mtime for path in paths if path.is_file()), default=0.0)
+
+
+def latest_source_mtime():
+    return latest_mtime(source_manifests())
+
+
+def latest_config_mtime():
+    return latest_mtime(list(iter_gradle_settings_or_catalog_files()))
+
+
+def latest_build_output_mtime():
+    outputs = root / "app/build/outputs"
+    if not outputs.is_dir():
+        return 0.0
+    return latest_mtime(path for path in outputs.rglob("*") if path.is_file())
 
 
 def readme_permission_count(path: Path):
@@ -300,15 +314,18 @@ if manifest.is_file() and expected_permissions is not None:
         merged_manifest_paths = merged_manifests()
         if not merged_manifest_paths:
             errors.append(f"{name}: no merged manifests found; run :app:assembleDebug before verifier")
-        input_mtime = latest_input_mtime()
+        source_mtime = latest_source_mtime()
+        config_mtime = latest_config_mtime()
+        build_output_mtime = latest_build_output_mtime()
         stale_merged = [
             rel(path)
             for path in merged_manifest_paths
-            if path.stat().st_mtime < input_mtime
+            if path.stat().st_mtime < source_mtime
+            or (path.stat().st_mtime < config_mtime and build_output_mtime < config_mtime)
         ]
         if stale_merged:
             errors.append(
-                f"{name}: merged manifests are older than source manifests; "
+                f"{name}: merged manifests are older than manifest/build inputs; "
                 f"run :app:assembleDebug before verifier: {format_values(stale_merged)}"
             )
         for merged_manifest in merged_manifest_paths:
