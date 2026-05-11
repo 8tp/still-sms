@@ -4,7 +4,7 @@
 
 #### A monochrome SMS / MMS app that doesn't phone home.
 
-part of the [still](../STILL.md) family. the pact governs every line of code in this repo.
+part of the [still](STILL.md) family. the pact governs every line of code in this repo.
 
 <br>
 
