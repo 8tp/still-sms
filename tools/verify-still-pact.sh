@@ -292,7 +292,10 @@ if manifest.is_file() and expected_permissions is not None:
             f"{application_id}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
         )
         allowed_merged_permissions = expected_permissions | {dynamic_permission}
-        for merged_manifest in merged_manifests():
+        merged_manifest_paths = merged_manifests()
+        if not merged_manifest_paths:
+            errors.append(f"{name}: no merged manifests found; run :app:assembleDebug before verifier")
+        for merged_manifest in merged_manifest_paths:
             try:
                 merged_permissions, declared_permissions = parse_manifest_permissions(
                     merged_manifest
