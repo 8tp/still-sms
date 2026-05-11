@@ -89,44 +89,45 @@ object MmsSender {
         }
         insertImagePart(ctx, mmsId, mimeType, imageBytes)
 
-        // 4. Build the wire-format M-Send.req PDU and stage it in cacheDir.
-        val parts = buildList<Part> {
-            add(buildSmilPart(hasText = !body.isNullOrBlank(), imageName = "image", imageMime = mimeType))
-            if (!body.isNullOrBlank()) add(buildTextPart(body))
-            add(buildImagePart(imageBytes, mimeType))
-        }
-        val pduBytes = MmsPduEncoder.encodeSendReq(
-            recipient = address,
-            subject = null,
-            parts = parts,
-        )
-
-        val pduFile = stagePduFile(ctx, pduBytes)
-        val pduUri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", pduFile)
-        // The modem-side process is com.android.phone on AOSP / GrapheneOS, but some OEM
-        // forks (Samsung, Xiaomi) route MMS through com.android.mms.service. Grant both;
-        // the unused grant is a no-op when the package isn't installed.
-        for (target in listOf("com.android.phone", "com.android.mms.service")) {
-            runCatching {
-                ctx.grantUriPermission(target, pduUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-        }
-
-        // 5. Hand off to SmsManager. The sentIntent fires once the carrier handshake
-        //    resolves (success or failure) — see MmsSentReceiver.
-        val sentIntent = Intent(ctx, MmsSentReceiver::class.java).apply {
-            action = ACTION_SENT
-            data = mmsUri
-            putExtra(EXTRA_MESSAGE_URI, mmsUri.toString())
-        }
-        val pi = PendingIntent.getBroadcast(
-            ctx,
-            (mmsId * 31).toInt(),
-            sentIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
-        )
-
+        // 4. Build, stage, and hand off the wire-format M-Send.req PDU. Any exception
+        //    after the provider row exists must flip that row to FAILED so it never
+        //    sits forever in outbox.
         runCatching {
+            val parts = buildList<Part> {
+                add(buildSmilPart(hasText = !body.isNullOrBlank(), imageName = "image", imageMime = mimeType))
+                if (!body.isNullOrBlank()) add(buildTextPart(body))
+                add(buildImagePart(imageBytes, mimeType))
+            }
+            val pduBytes = MmsPduEncoder.encodeSendReq(
+                recipient = address,
+                subject = null,
+                parts = parts,
+            )
+
+            val pduFile = stagePduFile(ctx, pduBytes)
+            val pduUri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", pduFile)
+            // The modem-side process is com.android.phone on AOSP / GrapheneOS, but some OEM
+            // forks (Samsung, Xiaomi) route MMS through com.android.mms.service. Grant both;
+            // the unused grant is a no-op when the package isn't installed.
+            for (target in listOf("com.android.phone", "com.android.mms.service")) {
+                runCatching {
+                    ctx.grantUriPermission(target, pduUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            }
+
+            // The sentIntent fires once the carrier handshake resolves (success or
+            // failure) — see MmsSentReceiver.
+            val sentIntent = Intent(ctx, MmsSentReceiver::class.java).apply {
+                action = ACTION_SENT
+                data = mmsUri
+                putExtra(EXTRA_MESSAGE_URI, mmsUri.toString())
+            }
+            val pi = PendingIntent.getBroadcast(
+                ctx,
+                (mmsId * 31).toInt(),
+                sentIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+            )
             mmsManager(ctx).sendMultimediaMessage(ctx, pduUri, null, null, pi)
         }.onFailure {
             markFailed(ctx, mmsUri)

@@ -22,7 +22,6 @@ package dev.chuds.stillsms.sms
  */
 
 import android.app.PendingIntent
-import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -65,33 +64,33 @@ object SmsSender {
             resolver.insert(Telephony.Sms.Sent.CONTENT_URI, values)
         }.getOrNull() ?: return null
 
-        val sm = smsManager(ctx)
-        val parts = sm.divideMessage(body)
-        val sentIntents = ArrayList<PendingIntent>(parts.size)
-        for (i in parts.indices) {
-            val intent = Intent(ctx, SmsSentReceiver::class.java).apply {
-                action = SmsSentReceiver.ACTION_SENT
-                data = uri
-                putExtra(EXTRA_MESSAGE_URI, uri.toString())
-                putExtra(EXTRA_PART_INDEX, i)
-                putExtra(EXTRA_PART_COUNT, parts.size)
-            }
-            sentIntents += PendingIntent.getBroadcast(
-                ctx,
-                ContentUris.parseId(uri).toInt() * 1000 + i,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
-        }
-
         runCatching {
+            val sm = smsManager(ctx)
+            val parts = sm.divideMessage(body)
+            val sentIntents = ArrayList<PendingIntent>(parts.size)
+            for (i in parts.indices) {
+                val intent = Intent(ctx, SmsSentReceiver::class.java).apply {
+                    action = SmsSentReceiver.ACTION_SENT
+                    data = uri
+                    putExtra(EXTRA_MESSAGE_URI, uri.toString())
+                    putExtra(EXTRA_PART_INDEX, i)
+                    putExtra(EXTRA_PART_COUNT, parts.size)
+                }
+                sentIntents += PendingIntent.getBroadcast(
+                    ctx,
+                    uri.toString().hashCode() * 31 + i,
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+            }
             if (parts.size == 1) {
                 sm.sendTextMessage(address, null, parts[0], sentIntents[0], null)
             } else {
                 sm.sendMultipartTextMessage(address, null, parts, sentIntents, null)
             }
         }.onFailure {
-            // Hard failure (e.g., no SIM). Flip the row immediately.
+            // Hard failure (e.g., no SIM or PendingIntent setup failure). Flip the
+            // row immediately so it never sits forever as queued.
             markFailed(ctx, uri)
         }
 
