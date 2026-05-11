@@ -131,7 +131,7 @@ To be eligible for `RoleManager.ROLE_SMS`, all four must exist
 
 ## permissions
 
-Six runtime permissions, all disclosed honestly in README and About.
+Seven runtime permissions, all disclosed honestly in README and About.
 
 | permission | why |
 |---|---|
@@ -139,6 +139,7 @@ Six runtime permissions, all disclosed honestly in README and About.
 | `READ_SMS` | read the sms-mms provider to render threads |
 | `RECEIVE_SMS` | catch inbound SMS before SMS_DELIVER (compat) |
 | `RECEIVE_MMS` | catch inbound MMS WAP push |
+| `RECEIVE_WAP_PUSH` | receive `WAP_PUSH_DELIVER` MMS notification PDUs |
 | `READ_CONTACTS` | resolve numbers → display names |
 | `POST_NOTIFICATIONS` | Android 13+, new-message notifications |
 
