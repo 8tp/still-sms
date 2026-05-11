@@ -8,12 +8,11 @@ package dev.chuds.stillsms.data
  *
  *   {"blocked": ["+15551234567", "+15552223333"]}
  *
- * On read we normalize to E.164 via PhoneNumberUtils.normalizeNumber so the UI can show
- * what the user typed but the SMS_DELIVER drop-decision works against canonical strings.
+ * On read we normalize to strict E.164 so the UI can show the canonical number and
+ * the SMS_DELIVER drop-decision works as an exact set lookup.
  */
 
 import android.content.Context
-import android.telephony.PhoneNumberUtils
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,14 +35,14 @@ class BlockListRepository(context: Context) {
     }
 
     suspend fun add(rawAddress: String) = withContext(Dispatchers.IO) {
-        val n = normalize(rawAddress) ?: return@withContext
+        val n = BlockListMatcher.normalize(rawAddress) ?: return@withContext
         val updated = _state.value + n
         _state.value = updated
         write(updated)
     }
 
     suspend fun remove(rawAddress: String) = withContext(Dispatchers.IO) {
-        val n = normalize(rawAddress) ?: return@withContext
+        val n = BlockListMatcher.normalize(rawAddress) ?: return@withContext
         val updated = _state.value - n
         _state.value = updated
         write(updated)
@@ -51,8 +50,7 @@ class BlockListRepository(context: Context) {
 
     /** Hot-path check for SmsDeliverReceiver. */
     fun isBlocked(rawAddress: String?): Boolean {
-        val n = rawAddress?.let { normalize(it) } ?: return false
-        return _state.value.contains(n)
+        return BlockListMatcher.isBlocked(_state.value, rawAddress)
     }
 
     /** Exposed for screens that want a synchronously-readable snapshot. */
@@ -70,7 +68,7 @@ class BlockListRepository(context: Context) {
             buildSet {
                 for (i in 0 until arr.length()) {
                     val raw = arr.optString(i).orEmpty()
-                    normalize(raw)?.let { add(it) }
+                    BlockListMatcher.normalize(raw)?.let { add(it) }
                 }
             }
         }.onSuccess { set -> _state.value = set }
@@ -82,11 +80,5 @@ class BlockListRepository(context: Context) {
         values.sorted().forEach { arr.put(it) }
         val obj = JSONObject().put("blocked", arr)
         file.writeText(obj.toString(2))
-    }
-
-    private fun normalize(raw: String): String? {
-        val trimmed = raw.trim()
-        if (trimmed.isEmpty()) return null
-        return PhoneNumberUtils.normalizeNumber(trimmed) ?: trimmed
     }
 }

@@ -168,22 +168,24 @@ internal object MmsPduDecoder {
         if (first >= 0x80) {
             return Pair(decodeWellKnownMime(first and 0x7F), null)
         }
+        if (first >= 0x20) {
+            return Pair(readTextStringStartingWith(s, first), null)
+        }
+
         // Long form.
         val payloadLen = if (first == 0x1F) readUintvar(s).toInt() else first
-        val end = (s as ByteArrayInputStream).available() - (s.available() - payloadLen)
+        val endAvailable = if (s is ByteArrayInputStream) s.available() - payloadLen else -1
+
         // Read mime: short-int OR text-string.
         val mark = s.read() and 0xFF
         val mime: String = if (mark >= 0x80) decodeWellKnownMime(mark and 0x7F)
-        else buildString {
-            append(mark.toChar())
-            var b = s.read()
-            while (b > 0) { append(b.toChar()); b = s.read() }
-        }
+        else readTextStringStartingWith(s, mark)
+
         var name: String? = null
         // Walk parameters until we've consumed payloadLen bytes (best-effort).
         // If we can't track precisely, stop on first decode failure.
         runCatching {
-            while (s.available() > end) {
+            while (endAvailable >= 0 && s.available() > endAvailable) {
                 val pcode = s.read() and 0xFF
                 if (pcode == WspParam.NAME) name = readTextString(s)
                 else if (pcode == WspParam.CHARSET) s.read()
@@ -196,10 +198,18 @@ internal object MmsPduDecoder {
         return Pair(mime, name)
     }
 
-    /** Skip past the content-type header block (long-form only — we land here from parseRetrieveConf). */
+    /** Skip past the content-type header block while preserving alignment with the multipart body. */
     private fun skipContentTypeHeader(s: InputStream) {
-        // We don't need the value; just consume value-length + body.
-        skipValueLengthAndBody(s)
+        // We don't need the value; just consume the content-type value and leave the body aligned.
+        val first = s.read() and 0xFF
+        when {
+            first >= 0x80 -> Unit
+            first >= 0x20 -> skipTextStringRest(s)
+            else -> {
+                val len = if (first == 0x1F) readUintvar(s).toInt() else first
+                s.skip(len.toLong())
+            }
+        }
     }
 
     private fun decodeWellKnownMime(code: Int): String = when (code) {
@@ -217,15 +227,33 @@ internal object MmsPduDecoder {
     // --- WSP primitives ---
 
     private fun readTextString(s: InputStream): String? {
-        val sb = StringBuilder()
         var b = s.read()
         // First byte of 0x7F is a "quote" introducer.
         if (b == 0x7F) b = s.read()
+        // WSP quoted-string starts with 0x22 and does not include it in the value.
+        if (b == 0x22) b = s.read()
+        val sb = StringBuilder()
         while (b > 0) {
             sb.append(b.toChar())
             b = s.read()
         }
         return if (sb.isEmpty() && b <= 0) null else sb.toString()
+    }
+
+    private fun readTextStringStartingWith(s: InputStream, first: Int): String {
+        var b = first
+        if (b == 0x7F || b == 0x22) b = s.read()
+        val sb = StringBuilder()
+        while (b > 0) {
+            sb.append(b.toChar())
+            b = s.read()
+        }
+        return sb.toString()
+    }
+
+    private fun skipTextStringRest(s: InputStream) {
+        var b = s.read()
+        while (b > 0) b = s.read()
     }
 
     private fun readEncodedString(s: InputStream): String? {
