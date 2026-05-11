@@ -23,9 +23,14 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-class BlockListRepository(context: Context) {
+class BlockListRepository private constructor(
+    private val file: File,
+) {
 
-    private val file: File = File(context.applicationContext.filesDir, "blocked.json")
+    constructor(context: Context) : this(File(context.applicationContext.filesDir, "blocked.json"))
+    internal constructor(filesRoot: File, marker: Unit = Unit) : this(File(filesRoot, "blocked.json"))
+
+    private val diskLock = lockFor(file)
     private val _state = MutableStateFlow<Set<String>>(emptySet())
     val blocked: StateFlow<Set<String>> = _state.asStateFlow()
 
@@ -36,17 +41,21 @@ class BlockListRepository(context: Context) {
 
     suspend fun add(rawAddress: String): Boolean = withContext(Dispatchers.IO) {
         val n = BlockListMatcher.normalize(rawAddress) ?: return@withContext false
-        val updated = _state.value + n
-        _state.value = updated
-        write(updated)
-        true
+        synchronized(diskLock) {
+            val updated = readFromDisk() + n
+            _state.value = updated
+            write(updated)
+            true
+        }
     }
 
     suspend fun remove(rawAddress: String) = withContext(Dispatchers.IO) {
         val n = BlockListMatcher.normalize(rawAddress) ?: return@withContext
-        val updated = _state.value - n
-        _state.value = updated
-        write(updated)
+        synchronized(diskLock) {
+            val updated = readFromDisk() - n
+            _state.value = updated
+            write(updated)
+        }
     }
 
     /** Hot-path check for SmsDeliverReceiver. */
@@ -58,22 +67,26 @@ class BlockListRepository(context: Context) {
     fun snapshot(): Set<String> = _state.value
 
     private fun loadFromDisk() {
-        if (!file.exists()) {
-            _state.value = emptySet()
-            return
+        synchronized(diskLock) {
+            _state.value = readFromDisk()
         }
-        runCatching {
+    }
+
+    private fun readFromDisk(): Set<String> {
+        if (!file.exists()) {
+            return emptySet()
+        }
+        return runCatching {
             val text = file.readText()
             if (text.isBlank()) return@runCatching emptySet<String>()
             val arr = JSONObject(text).optJSONArray("blocked") ?: JSONArray()
             buildSet {
                 for (i in 0 until arr.length()) {
                     val raw = arr.optString(i).orEmpty()
-                    BlockListMatcher.normalize(raw)?.let { add(it) }
+                    BlockListMatcher.normalize(raw)?.let { normalized -> this.add(normalized) }
                 }
             }
-        }.onSuccess { set -> _state.value = set }
-            .onFailure { _state.value = emptySet() }
+        }.getOrDefault(emptySet())
     }
 
     private fun write(values: Set<String>) {
@@ -81,5 +94,15 @@ class BlockListRepository(context: Context) {
         values.sorted().forEach { arr.put(it) }
         val obj = JSONObject().put("blocked", arr)
         file.writeText(obj.toString(2))
+    }
+
+    companion object {
+        private val locks = mutableMapOf<String, Any>()
+
+        @Synchronized
+        private fun lockFor(file: File): Any {
+            val key = runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
+            return locks.getOrPut(key) { Any() }
+        }
     }
 }

@@ -18,7 +18,9 @@ in the system role. Differentiates by removal, not by addition.
 
 These are anti-features for a reason. Document each in the README.
 
-- **No avatars or contact photos.** Initials in a 1-bit circle, or nothing.
+- **No remote avatars or custom avatar system.** System contact photos may
+  render when `ContactsContract` has one; otherwise show initials in a 1-bit
+  circle, or nothing.
 - **No reactions, stickers, GIF picker, emoji panel.** System keyboard handles
   emoji.
 - **No read receipts, delivery receipts, typing indicators.** SMS doesn't have

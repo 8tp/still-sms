@@ -60,14 +60,21 @@ fun ThreadScreen(
     messages: List<Message>,
     settings: SmsSettings,
     canSend: Boolean,
+    initialDraft: String = "",
     onSend: (String) -> Unit,
     onAttach: (currentDraft: String) -> Unit,
     onLongPressMessage: (Message) -> Unit,
     onOpenContact: () -> Unit,
     onBack: () -> Unit,
 ) {
-    var draft by rememberSaveable { mutableStateOf("") }
+    var draft by rememberSaveable(title, subtitle) { mutableStateOf(initialDraft) }
     val listState = rememberLazyListState()
+
+    LaunchedEffect(initialDraft) {
+        if (initialDraft.isNotBlank() && draft.isBlank()) {
+            draft = initialDraft
+        }
+    }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {

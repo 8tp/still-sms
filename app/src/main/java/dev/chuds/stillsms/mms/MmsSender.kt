@@ -70,31 +70,17 @@ object MmsSender {
             ?: return@withContext null
         val mmsId = ContentUris.parseId(mmsUri)
 
-        // 2. Insert the recipient address row (TO=151).
-        val addrValues = ContentValues().apply {
-            put("address", address)
-            put("type", 151)             // PduHeaders.TO
-            put("charset", 106)          // UTF-8
-            put("msg_id", mmsId)
-        }
-        runCatching {
-            ctx.contentResolver.insert(Uri.parse("content://mms/$mmsId/addr"), addrValues)
-        }
-
-        // 3. Insert body parts so renderers see them immediately. SMIL part is implied by
-        //    the multipart/related content-type and isn't strictly needed in the provider
-        //    rows for our own UI; we still write a text part if there's a caption, plus
-        //    an image part with the local image bytes.
-        if (!body.isNullOrBlank()) {
-            insertTextPart(ctx, mmsId, body)
-        }
-        insertImagePart(ctx, mmsId, mimeType, imageBytes)
-
-        // 4. Build, stage, and hand off the wire-format M-Send.req PDU. Any exception
+        // 2. Insert provider metadata and hand off the wire-format M-Send.req PDU. Any exception
         //    after the provider row exists must flip that row to FAILED so it never
-        //    sits forever in outbox.
+        //    sits forever in outbox or ships carrier-side without matching local history.
         var pduFile: File? = null
         runCatching {
+            insertRecipientAddress(ctx, mmsId, address)
+            if (!body.isNullOrBlank()) {
+                insertTextPart(ctx, mmsId, body)
+            }
+            insertImagePart(ctx, mmsId, mimeType, imageBytes)
+
             val parts = buildList<Part> {
                 add(buildSmilPart(hasText = !body.isNullOrBlank(), imageName = "image", imageMime = mimeType))
                 if (!body.isNullOrBlank()) add(buildTextPart(body))
@@ -128,7 +114,7 @@ object MmsSender {
             }
             val pi = PendingIntent.getBroadcast(
                 ctx,
-                (mmsId * 31).toInt(),
+                mmsUri.toString().hashCode(),
                 sentIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
             )
@@ -157,6 +143,17 @@ object MmsSender {
 
     // --- provider writes ---
 
+    private fun insertRecipientAddress(context: Context, mmsId: Long, address: String) {
+        val v = ContentValues().apply {
+            put("address", address)
+            put("type", 151)             // PduHeaders.TO
+            put("charset", 106)          // UTF-8
+            put("msg_id", mmsId)
+        }
+        context.contentResolver.insert(Uri.parse("content://mms/$mmsId/addr"), v)
+            ?: error("MMS address insert failed")
+    }
+
     private fun insertTextPart(context: Context, mmsId: Long, text: String) {
         val v = ContentValues().apply {
             put(Telephony.Mms.Part.MSG_ID, mmsId)
@@ -166,9 +163,8 @@ object MmsSender {
             put(Telephony.Mms.Part.CHARSET, 106)
             put(Telephony.Mms.Part.TEXT, text)
         }
-        runCatching {
-            context.contentResolver.insert(Uri.parse("content://mms/$mmsId/part"), v)
-        }
+        context.contentResolver.insert(Uri.parse("content://mms/$mmsId/part"), v)
+            ?: error("MMS text part insert failed")
     }
 
     private fun insertImagePart(context: Context, mmsId: Long, mime: String, bytes: ByteArray) {
@@ -184,12 +180,11 @@ object MmsSender {
             put(Telephony.Mms.Part.CONTENT_LOCATION, "image.$ext")
             put(Telephony.Mms.Part.NAME, "image.$ext")
         }
-        val partUri = runCatching {
-            context.contentResolver.insert(Uri.parse("content://mms/$mmsId/part"), v)
-        }.getOrNull() ?: return
-        runCatching {
-            context.contentResolver.openOutputStream(partUri)?.use { it.write(bytes) }
-        }
+        val partUri = context.contentResolver.insert(Uri.parse("content://mms/$mmsId/part"), v)
+            ?: error("MMS image part insert failed")
+        val stream = context.contentResolver.openOutputStream(partUri)
+            ?: error("MMS image part stream unavailable")
+        stream.use { it.write(bytes) }
     }
 
     // --- pdu staging ---

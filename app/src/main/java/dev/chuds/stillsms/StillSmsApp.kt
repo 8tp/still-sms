@@ -64,7 +64,7 @@ import kotlinx.coroutines.launch
 
 private sealed interface Route {
     data object Threads : Route
-    data class Thread(val threadId: Long, val address: String) : Route
+    data class Thread(val threadId: Long, val address: String, val prefillBody: String? = null) : Route
     data object Settings : Route
     data object BlockList : Route
 }
@@ -117,16 +117,18 @@ fun StillSmsApp(
     val blocked by blockListRepository.blocked.collectAsState()
 
     var route by remember { mutableStateOf<Route>(Route.Threads) }
+    var pendingComposePrefill by remember { mutableStateOf(initialPrefillBody) }
     LaunchedEffect(initialThreadId, threads) {
         val tid = initialThreadId ?: return@LaunchedEffect
         val match = threads.firstOrNull { it.id == tid } ?: return@LaunchedEffect
         route = Route.Thread(tid, match.address)
     }
     // ACTION_SENDTO landed in MainActivity → resolve to a Thread route by address.
-    LaunchedEffect(initialAddress) {
+    LaunchedEffect(initialAddress, initialPrefillBody) {
         val addr = initialAddress?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
         val tid = threadRepository.threadIdForAddress(addr)
-        route = Route.Thread(tid, addr)
+        route = Route.Thread(tid, addr, initialPrefillBody)
+        pendingComposePrefill = null
     }
 
     BackHandler(enabled = route !is Route.Threads) {
@@ -218,7 +220,9 @@ fun StillSmsApp(
             val number = resolvePickedNumber(activityContext, data)
             if (!number.isNullOrBlank()) {
                 val tid = threadRepository.threadIdForAddress(number)
-                route = Route.Thread(tid, number)
+                val prefill = pendingComposePrefill
+                pendingComposePrefill = null
+                route = Route.Thread(tid, number, prefill)
             }
         }
     }
@@ -257,7 +261,11 @@ fun StillSmsApp(
                         settings = settings,
                         isDefaultApp = isDefault,
                         onRequestDefault = ::requestRole,
-                        onOpenThread = { thread -> route = Route.Thread(thread.id, thread.address) },
+                        onOpenThread = { thread ->
+                            val prefill = pendingComposePrefill
+                            pendingComposePrefill = null
+                            route = Route.Thread(thread.id, thread.address, prefill)
+                        },
                         onLongPressThread = { thread -> longPressedThread = thread },
                         onCompose = {
                             val pickIntent = Intent(Intent.ACTION_PICK).apply {
@@ -296,6 +304,7 @@ fun StillSmsApp(
                             messages = messages,
                             settings = settings,
                             canSend = isDefault && resolvedAddress.isNotBlank(),
+                            initialDraft = current.prefillBody.orEmpty(),
                             onSend = { body ->
                                 scope.launch {
                                     val sentUri = SmsSender.send(activityContext, resolvedAddress, body)

@@ -39,6 +39,18 @@ class QuickReplyReceiver : BroadcastReceiver() {
                 arrayOf(threadId.toString()),
             )
         }
+        runCatching {
+            val values = ContentValues().apply {
+                put(Telephony.Mms.READ, 1)
+                put(Telephony.Mms.SEEN, 1)
+            }
+            context.contentResolver.update(
+                Telephony.Mms.CONTENT_URI,
+                values,
+                "${Telephony.Mms.THREAD_ID} = ? AND ${Telephony.Mms.READ} = 0",
+                arrayOf(threadId.toString()),
+            )
+        }
         NewMessageNotifier.dismiss(context, threadId)
     }
 }
