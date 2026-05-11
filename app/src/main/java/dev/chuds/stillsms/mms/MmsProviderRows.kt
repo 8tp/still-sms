@@ -6,8 +6,29 @@ import android.content.Context
 import android.net.Uri
 import android.provider.Telephony
 
-private const val MMS_ADDR_FROM = 137
+internal const val MMS_ADDR_FROM = 137
 private const val MMS_ADDR_CHARSET_UTF8 = 106
+
+/**
+ * Reads the FROM (type=137) addr row for an MMS placeholder. Used by MmsDownloadReceiver
+ * to keep the notification-seeded sender stable when the carrier's M-Retrieve.conf From
+ * differs from the WAP-push notification From — first writer wins.
+ */
+internal fun readInboundMmsFromAddress(context: Context, mmsUri: Uri): String? {
+    val mmsId = runCatching { ContentUris.parseId(mmsUri) }.getOrNull() ?: return null
+    val addrUri = Uri.parse("content://mms/$mmsId/addr")
+    return runCatching {
+        context.contentResolver.query(
+            addrUri,
+            arrayOf("address"),
+            "type = ?",
+            arrayOf(MMS_ADDR_FROM.toString()),
+            null,
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0)?.takeIf { it.isNotBlank() } else null
+        }
+    }.getOrNull()
+}
 
 internal fun seedInboundMmsAddress(
     context: Context,

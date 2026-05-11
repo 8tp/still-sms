@@ -61,7 +61,13 @@ class MmsDownloadReceiver : BroadcastReceiver() {
         }
 
         val mmsId = ContentUris.parseId(placeholderUri)
-        val from = parsed.from ?: notifFrom
+        // First writer wins: if the WAP-push notification already seeded a FROM addr,
+        // keep that sender (and therefore thread) stable. The carrier-side M-Retrieve.conf
+        // From sometimes diverges from the notification From; rebinding would silently
+        // move the placeholder (and the already-posted heads-up's thread target) to a
+        // different conversation. parsed.from is recorded only when we have nothing else.
+        val seededFrom = readInboundMmsFromAddress(ctx, placeholderUri)
+        val from = resolveInboundFrom(seededFrom, parsed.from, notifFrom)
         if (BlockListRepository(ctx).isBlocked(from)) {
             runCatching { ctx.contentResolver.delete(placeholderUri, null, null) }
             runCatching { file.delete() }
@@ -71,8 +77,15 @@ class MmsDownloadReceiver : BroadcastReceiver() {
         var threadId = -1L
         var snippet: String? = null
         try {
-            // Update the placeholder with the address-derived thread id and subject.
-            threadId = seedInboundMmsAddress(ctx, placeholderUri, from)
+            // Only seed (which deletes + re-inserts the FROM addr row, potentially moving
+            // thread id) when the notification didn't already seed a sender.
+            threadId = if (seededFrom.isNullOrBlank()) {
+                seedInboundMmsAddress(ctx, placeholderUri, from)
+            } else {
+                runCatching {
+                    Telephony.Threads.getOrCreateThreadId(ctx, seededFrom)
+                }.getOrDefault(-1L)
+            }
             val updated = ctx.contentResolver.update(
                 placeholderUri,
                 ContentValues().apply {
@@ -120,6 +133,26 @@ class MmsDownloadReceiver : BroadcastReceiver() {
         markInboundMmsRetrieveFailed(context, placeholderUri, from)
     }
 }
+
+/**
+ * Pure decision for which sender wins when the WAP-push notification, the carrier
+ * M-Retrieve.conf, and the notification-derived fallback all might disagree.
+ *
+ * Precedence:
+ *   1. seededFrom (notification-time FROM addr row already in the provider)
+ *   2. parsed.from (M-Retrieve.conf From header)
+ *   3. notifFrom   (intent extra carried forward from the WAP-push)
+ *
+ * The first non-blank wins. Returning the seeded value when present keeps the placeholder
+ * in its notification-time thread even if the carrier rewrites the sender mid-handshake.
+ */
+internal fun resolveInboundFrom(
+    seededFrom: String?,
+    parsedFrom: String?,
+    notifFrom: String?,
+): String? = seededFrom?.takeIf { it.isNotBlank() }
+    ?: parsedFrom?.takeIf { it.isNotBlank() }
+    ?: notifFrom?.takeIf { it.isNotBlank() }
 
 internal data class MmsProviderPart(
     val contentType: String,
