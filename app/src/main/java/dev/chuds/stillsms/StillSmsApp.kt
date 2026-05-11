@@ -277,10 +277,11 @@ fun StillSmsApp(
                         settings = settings,
                         isDefaultApp = isDefault,
                         onRequestDefault = ::requestRole,
+                        // Tapping an existing thread is not a forward target. Any pending
+                        // SENDTO prefill stays queued for the explicit compose flow below
+                        // and is consumed there once the user picks a recipient.
                         onOpenThread = { thread ->
-                            val prefill = pendingComposePrefill
-                            pendingComposePrefill = null
-                            route = Route.Thread(thread.id, thread.address, prefill)
+                            route = Route.Thread(thread.id, thread.address)
                         },
                         onLongPressThread = { thread -> longPressedThread = thread },
                         onCompose = {
