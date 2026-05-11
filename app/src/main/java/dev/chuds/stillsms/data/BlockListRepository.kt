@@ -34,11 +34,12 @@ class BlockListRepository(context: Context) {
         runBlocking(Dispatchers.IO) { loadFromDisk() }
     }
 
-    suspend fun add(rawAddress: String) = withContext(Dispatchers.IO) {
-        val n = BlockListMatcher.normalize(rawAddress) ?: return@withContext
+    suspend fun add(rawAddress: String): Boolean = withContext(Dispatchers.IO) {
+        val n = BlockListMatcher.normalize(rawAddress) ?: return@withContext false
         val updated = _state.value + n
         _state.value = updated
         write(updated)
+        true
     }
 
     suspend fun remove(rawAddress: String) = withContext(Dispatchers.IO) {

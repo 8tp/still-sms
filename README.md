@@ -165,7 +165,7 @@ The app appears as **still sms** in the launcher. On first launch, tap `make def
 
 ## Notes for GrapheneOS
 
-Still SMS depends on no part of Google Play Services and declares only the six SMS / MMS / contacts / notifications permissions listed above, so it runs cleanly on a fresh GrapheneOS profile. The default-SMS role grants both read and write to `content://sms` and `content://mms` without additional runtime permissions. `RECEIVE_WAP_PUSH` is required for the WAP_PUSH_DELIVER intent filter the role gauntlet enforces.
+Still SMS depends on no part of Google Play Services and declares only the seven SMS / MMS / contacts / notifications permissions listed above, so it runs cleanly on a fresh GrapheneOS profile. The default-SMS role grants both read and write to `content://sms` and `content://mms` without additional runtime permissions. `RECEIVE_WAP_PUSH` is required for the WAP_PUSH_DELIVER intent filter the role gauntlet enforces.
 
 ## Status
 

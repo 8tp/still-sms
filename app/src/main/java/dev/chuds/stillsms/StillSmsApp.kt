@@ -388,8 +388,9 @@ fun StillSmsApp(
                         },
                         StillAction(label = "block") {
                             scope.launch {
-                                blockListRepository.add(th.address)
-                                threadRepository.deleteThread(th.id)
+                                if (blockListRepository.add(th.address)) {
+                                    threadRepository.deleteThread(th.id)
+                                }
                             }
                         },
                         StillAction(label = "delete", destructive = true) {
