@@ -191,9 +191,17 @@ def merged_manifests():
     for pattern in patterns:
         for path in intermediates.glob(pattern):
             resolved = path.resolve()
-            if path.is_file() and resolved not in seen:
-                seen.add(resolved)
-                paths.append(path)
+            if not path.is_file() or resolved in seen:
+                continue
+            # AndroidTest variants produce a separate test APK manifest (e.g.
+            # debugAndroidTest) that legitimately pulls espresso's REORDER_TASKS
+            # and a <queries> block for the AndroidJUnitRunner orchestrator. That
+            # manifest is not part of the shipping APK, so it isn't bound by the
+            # still pact's permission allowlist.
+            if any("androidtest" in part.lower() for part in path.relative_to(root).parts):
+                continue
+            seen.add(resolved)
+            paths.append(path)
     return sorted(paths)
 
 
