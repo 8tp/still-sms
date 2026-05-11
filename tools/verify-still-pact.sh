@@ -350,7 +350,7 @@ if manifest.is_file() and expected_permissions is not None:
         if stale_merged:
             errors.append(
                 f"{name}: merged manifests are older than manifest/build inputs; "
-                f"run :app:assembleDebug before verifier: {format_values(stale_merged)}"
+                f"run the affected assemble task(s) before verifier: {format_values(stale_merged)}"
             )
         for merged_manifest in merged_manifest_paths:
             try:
