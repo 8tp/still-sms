@@ -83,7 +83,7 @@ MainActivity
     │                                            content://mms, ContentObserver-backed Flow,
     │                                            archive / delete / mark-read primitives
     ├── ContactNameResolver                      ContactsContract.PhoneLookup → name + photo URI
-    ├── BlockListRepository                      plaintext JSON, normalized E.164
+    ├── BlockListRepository                      plaintext JSON, canonical exact-match keys
     ├── PreferencesRepository                    DataStore — font preset, 24h, haptics, group MMS,
     │                                            MMS auto-download
     ├── ThreadExporter                           one .txt per thread, zip via SAF, cat-able format

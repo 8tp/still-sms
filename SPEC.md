@@ -164,7 +164,9 @@ data/
 ```
 
 ### blocked numbers
-Stored as a plaintext JSON list of normalized E.164 strings.
+Stored as a plaintext JSON list of canonical exact-match keys:
+`+15551234567` for strict E.164, `12345` for short/national numeric
+senders, and `BANK-ID` for alphanumeric sender IDs.
 `SmsDeliverReceiver` checks every inbound message against this list before
 inserting into the provider; matches are dropped silently (no notification, no
 provider write).

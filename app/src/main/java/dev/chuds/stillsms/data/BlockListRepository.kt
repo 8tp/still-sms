@@ -6,10 +6,10 @@ package dev.chuds.stillsms.data
  * Format mirrors what still-dialer will use, deliberately, so the two apps can share a
  * single block list later without a migration:
  *
- *   {"blocked": ["+15551234567", "+15552223333"]}
+ *   {"blocked": ["+15551234567", "12345", "BANK-ID"]}
  *
- * On read we normalize to strict E.164 so the UI can show the canonical number and
- * the SMS_DELIVER drop-decision works as an exact set lookup.
+ * On read we normalize to canonical exact-match keys so the UI can show the stored
+ * sender key and the SMS_DELIVER drop-decision works as a plain set lookup.
  */
 
 import android.content.Context
