@@ -307,17 +307,24 @@ class ThreadRepository(
 
         // MMS direction lives in msg_box, NOT the cursor's "type" alias (which holds
         // Mms.MESSAGE_TYPE — m-send-req=128 / m-retrieve-conf=132 / etc., not the inbox
-        // bucket). 1=inbox, 4=outbox, 2=sent, 5=failed.
+        // bucket). Failed inbound carrier downloads keep a FROM addr row, so preserve
+        // inbound direction even though the provider bucket is MESSAGE_BOX_FAILED.
         val msgBox = cursor.getInt(11)
-        val direction = when (msgBox) {
-            Telephony.Mms.MESSAGE_BOX_INBOX -> Direction.Inbound
-            else -> Direction.Outbound
-        }
         val failed = msgBox == Telephony.Mms.MESSAGE_BOX_FAILED
+        val fromAddress = mmsAddress(id, Direction.Inbound)
+        val direction = mmsDirectionFor(msgBox, fromAddress)
 
-        val text = mmsTextBody(id) ?: ""
         val attachment = mmsFirstImagePartUri(id)
-        val address = mmsAddress(id, direction) ?: ""
+        val text = mmsTextBody(id) ?: mmsFallbackBody(
+            msgBox = msgBox,
+            failed = failed,
+            attachmentUri = attachment,
+        )
+        val address = if (direction == Direction.Inbound) {
+            fromAddress
+        } else {
+            mmsAddress(id, Direction.Outbound)
+        } ?: ""
         return Message(
             id = id,
             threadId = threadId,
@@ -384,5 +391,24 @@ class ThreadRepository(
             }
             null
         }
+    }
+}
+
+internal fun mmsDirectionFor(msgBox: Int, fromAddress: String?): Direction = when {
+    msgBox == Telephony.Mms.MESSAGE_BOX_INBOX -> Direction.Inbound
+    msgBox == Telephony.Mms.MESSAGE_BOX_FAILED && !fromAddress.isNullOrBlank() -> Direction.Inbound
+    else -> Direction.Outbound
+}
+
+internal fun mmsFallbackBody(
+    msgBox: Int,
+    failed: Boolean,
+    attachmentUri: String?,
+): String {
+    if (attachmentUri != null) return ""
+    return when {
+        failed -> "[mms download failed]"
+        msgBox == Telephony.Mms.MESSAGE_BOX_INBOX -> "[mms not downloaded]"
+        else -> ""
     }
 }

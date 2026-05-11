@@ -130,7 +130,7 @@ class MmsDownloadReceiver : BroadcastReceiver() {
             context.contentResolver.update(
                 placeholderUri,
                 ContentValues().apply {
-                    put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_INBOX)
+                    put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_FAILED)
                 },
                 null, null,
             )
