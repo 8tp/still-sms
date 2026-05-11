@@ -64,6 +64,7 @@ internal fun markInboundMmsRetrieveFailed(
             mmsUri,
             ContentValues().apply {
                 put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_FAILED)
+                put(Telephony.Mms.MESSAGE_TYPE, MmsMessageType.M_RETRIEVE_CONF)
             },
             null,
             null,

@@ -209,8 +209,15 @@ fun StillSmsApp(
     val contactPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
-        if (result.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
-        val data = result.data?.data ?: return@rememberLauncherForActivityResult
+        if (result.resultCode != Activity.RESULT_OK) {
+            pendingComposePrefill = null
+            return@rememberLauncherForActivityResult
+        }
+        val data = result.data?.data
+        if (data == null) {
+            pendingComposePrefill = null
+            return@rememberLauncherForActivityResult
+        }
         // Two shapes work here:
         //   1) An ACTION_PICK against vnd.android.cursor.dir/contact returns a contact URI;
         //      we read the lookup key and pull the primary phone.
@@ -223,6 +230,8 @@ fun StillSmsApp(
                 val prefill = pendingComposePrefill
                 pendingComposePrefill = null
                 route = Route.Thread(tid, number, prefill)
+            } else {
+                pendingComposePrefill = null
             }
         }
     }

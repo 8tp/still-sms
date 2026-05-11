@@ -53,11 +53,11 @@ class SmsDeliverReceiver : BroadcastReceiver() {
             put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_INBOX)
             if (threadId > 0) put(Telephony.Sms.THREAD_ID, threadId)
         }
-        runCatching {
+        val insertedUri = runCatching {
             context.contentResolver.insert(Telephony.Sms.Inbox.CONTENT_URI, values)
-        }
+        }.getOrNull()
 
-        if (threadId > 0 && body.isNotBlank()) {
+        if (shouldNotifyInboundSms(insertSucceeded = insertedUri != null, threadId = threadId, body = body)) {
             // Best-effort sender display: contact lookup runs synchronously here because
             // we're already on a background broadcast thread.
             val resolver = dev.chuds.stillsms.data.ContactNameResolver(context)
@@ -72,3 +72,6 @@ class SmsDeliverReceiver : BroadcastReceiver() {
         }
     }
 }
+
+internal fun shouldNotifyInboundSms(insertSucceeded: Boolean, threadId: Long, body: String): Boolean =
+    insertSucceeded && threadId > 0 && body.isNotBlank()

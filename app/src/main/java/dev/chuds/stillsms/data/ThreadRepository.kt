@@ -22,6 +22,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.Telephony
+import dev.chuds.stillsms.mms.MmsMessageType
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -309,10 +310,13 @@ class ThreadRepository(
         // Mms.MESSAGE_TYPE — m-send-req=128 / m-retrieve-conf=132 / etc., not the inbox
         // bucket). Failed inbound carrier downloads keep a FROM addr row, so preserve
         // inbound direction even though the provider bucket is MESSAGE_BOX_FAILED.
+        // If the best-effort FROM row could not be written, the original retrieve-conf
+        // message type still distinguishes inbound failed downloads from failed sends.
         val msgBox = cursor.getInt(11)
+        val mmsMessageType = cursor.getInt(5)
         val failed = msgBox == Telephony.Mms.MESSAGE_BOX_FAILED
         val fromAddress = mmsAddress(id, Direction.Inbound)
-        val direction = mmsDirectionFor(msgBox, fromAddress)
+        val direction = mmsDirectionFor(msgBox, fromAddress, mmsMessageType)
 
         val attachment = mmsFirstImagePartUri(id)
         val text = mmsTextBody(id) ?: mmsFallbackBody(
@@ -394,8 +398,13 @@ class ThreadRepository(
     }
 }
 
-internal fun mmsDirectionFor(msgBox: Int, fromAddress: String?): Direction = when {
+internal fun mmsDirectionFor(
+    msgBox: Int,
+    fromAddress: String?,
+    messageType: Int? = null,
+): Direction = when {
     msgBox == Telephony.Mms.MESSAGE_BOX_INBOX -> Direction.Inbound
+    msgBox == Telephony.Mms.MESSAGE_BOX_FAILED && messageType == MmsMessageType.M_RETRIEVE_CONF -> Direction.Inbound
     msgBox == Telephony.Mms.MESSAGE_BOX_FAILED && !fromAddress.isNullOrBlank() -> Direction.Inbound
     else -> Direction.Outbound
 }

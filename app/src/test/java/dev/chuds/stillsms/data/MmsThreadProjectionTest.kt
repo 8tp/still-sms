@@ -1,6 +1,7 @@
 package dev.chuds.stillsms.data
 
 import android.provider.Telephony
+import dev.chuds.stillsms.mms.MmsMessageType
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -23,6 +24,30 @@ class MmsThreadProjectionTest {
             mmsDirectionFor(
                 msgBox = Telephony.Mms.MESSAGE_BOX_FAILED,
                 fromAddress = null,
+            ),
+        )
+    }
+
+    @Test
+    fun failedRetrieveConfStaysInboundEvenWithoutFromAddress() {
+        assertEquals(
+            Direction.Inbound,
+            mmsDirectionFor(
+                msgBox = Telephony.Mms.MESSAGE_BOX_FAILED,
+                fromAddress = null,
+                messageType = MmsMessageType.M_RETRIEVE_CONF,
+            ),
+        )
+    }
+
+    @Test
+    fun failedSendReqWithoutFromAddressStaysOutbound() {
+        assertEquals(
+            Direction.Outbound,
+            mmsDirectionFor(
+                msgBox = Telephony.Mms.MESSAGE_BOX_FAILED,
+                fromAddress = null,
+                messageType = MmsMessageType.M_SEND_REQ,
             ),
         )
     }
