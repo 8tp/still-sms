@@ -44,14 +44,19 @@ class MmsDownloadReceiver : BroadcastReceiver() {
         val file = File(downloadPath)
         if (resultCode != Activity.RESULT_OK || !file.exists() || file.length() == 0L) {
             markRetrieveFailed(ctx, placeholderUri, notifFrom)
+            runCatching { file.delete() }
             return
         }
 
         val pdu = runCatching { file.readBytes() }.getOrNull() ?: run {
-            markRetrieveFailed(ctx, placeholderUri, notifFrom); return
+            markRetrieveFailed(ctx, placeholderUri, notifFrom)
+            runCatching { file.delete() }
+            return
         }
         val parsed = runCatching { MmsPduDecoder.parseRetrieveConf(pdu) }.getOrNull() ?: run {
-            markRetrieveFailed(ctx, placeholderUri, notifFrom); return
+            markRetrieveFailed(ctx, placeholderUri, notifFrom)
+            runCatching { file.delete() }
+            return
         }
 
         val mmsId = ContentUris.parseId(placeholderUri)

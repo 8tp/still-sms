@@ -20,12 +20,14 @@ internal fun seedInboundMmsAddress(
         Telephony.Threads.getOrCreateThreadId(context, from)
     }.getOrDefault(-1L)
     if (threadId > 0) {
-        context.contentResolver.update(
-            mmsUri,
-            ContentValues().apply { put(Telephony.Mms.THREAD_ID, threadId) },
-            null,
-            null,
-        )
+        runCatching {
+            context.contentResolver.update(
+                mmsUri,
+                ContentValues().apply { put(Telephony.Mms.THREAD_ID, threadId) },
+                null,
+                null,
+            )
+        }
     }
 
     val mmsId = ContentUris.parseId(mmsUri)
@@ -37,15 +39,17 @@ internal fun seedInboundMmsAddress(
             arrayOf(MMS_ADDR_FROM.toString()),
         )
     }
-    context.contentResolver.insert(
-        addrUri,
-        ContentValues().apply {
-            put("address", from)
-            put("type", MMS_ADDR_FROM)
-            put("charset", MMS_ADDR_CHARSET_UTF8)
-            put("msg_id", mmsId)
-        },
-    )
+    runCatching {
+        context.contentResolver.insert(
+            addrUri,
+            ContentValues().apply {
+                put("address", from)
+                put("type", MMS_ADDR_FROM)
+                put("charset", MMS_ADDR_CHARSET_UTF8)
+                put("msg_id", mmsId)
+            },
+        )
+    }
     return threadId
 }
 
@@ -54,8 +58,8 @@ internal fun markInboundMmsRetrieveFailed(
     mmsUri: Uri,
     from: String?,
 ) {
+    seedInboundMmsAddress(context, mmsUri, from)
     runCatching {
-        seedInboundMmsAddress(context, mmsUri, from)
         context.contentResolver.update(
             mmsUri,
             ContentValues().apply {

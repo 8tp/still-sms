@@ -32,6 +32,7 @@ object MmsSender {
 
     const val ACTION_SENT = "dev.chuds.stillsms.MMS_SENT"
     const val EXTRA_MESSAGE_URI = "still_sms.mms_uri"
+    const val EXTRA_PDU_FILE = "still_sms.mms.pdu_file"
 
     /**
      * Send an MMS to [address] with optional [body] text and a single [imageUri] attachment.
@@ -92,6 +93,7 @@ object MmsSender {
         // 4. Build, stage, and hand off the wire-format M-Send.req PDU. Any exception
         //    after the provider row exists must flip that row to FAILED so it never
         //    sits forever in outbox.
+        var pduFile: File? = null
         runCatching {
             val parts = buildList<Part> {
                 add(buildSmilPart(hasText = !body.isNullOrBlank(), imageName = "image", imageMime = mimeType))
@@ -104,8 +106,9 @@ object MmsSender {
                 parts = parts,
             )
 
-            val pduFile = stagePduFile(ctx, pduBytes)
-            val pduUri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", pduFile)
+            val stagedFile = stagePduFile(ctx, pduBytes)
+            pduFile = stagedFile
+            val pduUri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", stagedFile)
             // The modem-side process is com.android.phone on AOSP / GrapheneOS, but some OEM
             // forks (Samsung, Xiaomi) route MMS through com.android.mms.service. Grant both;
             // the unused grant is a no-op when the package isn't installed.
@@ -121,6 +124,7 @@ object MmsSender {
                 action = ACTION_SENT
                 data = mmsUri
                 putExtra(EXTRA_MESSAGE_URI, mmsUri.toString())
+                putExtra(EXTRA_PDU_FILE, stagedFile.absolutePath)
             }
             val pi = PendingIntent.getBroadcast(
                 ctx,
@@ -131,6 +135,7 @@ object MmsSender {
             mmsManager(ctx).sendMultimediaMessage(ctx, pduUri, null, null, pi)
         }.onFailure {
             markFailed(ctx, mmsUri)
+            pduFile?.let { file -> runCatching { file.delete() } }
         }
 
         mmsUri
