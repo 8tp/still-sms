@@ -74,6 +74,8 @@ fun StillSmsApp(
     initialThreadId: Long? = null,
     initialAddress: String? = null,
     initialPrefillBody: String? = null,
+    onInitialThreadHandled: () -> Unit = {},
+    onInitialComposeHandled: () -> Unit = {},
 ) {
     val context = LocalContext.current.applicationContext
     val activityContext = LocalContext.current
@@ -113,6 +115,9 @@ fun StillSmsApp(
         )
     }
     val threads by threadsFlow.collectAsState()
+    LaunchedEffect(isDefault) {
+        if (isDefault) threadRepository.refreshThreads()
+    }
 
     val blocked by blockListRepository.blocked.collectAsState()
 
@@ -122,6 +127,7 @@ fun StillSmsApp(
         val tid = initialThreadId ?: return@LaunchedEffect
         val match = threads.firstOrNull { it.id == tid } ?: return@LaunchedEffect
         route = Route.Thread(tid, match.address)
+        onInitialThreadHandled()
     }
     // ACTION_SENDTO landed in MainActivity → resolve to a Thread route by address.
     LaunchedEffect(initialAddress, initialPrefillBody) {
@@ -129,6 +135,7 @@ fun StillSmsApp(
         val tid = threadRepository.threadIdForAddress(addr)
         route = Route.Thread(tid, addr, initialPrefillBody)
         pendingComposePrefill = null
+        onInitialComposeHandled()
     }
 
     BackHandler(enabled = route !is Route.Threads) {

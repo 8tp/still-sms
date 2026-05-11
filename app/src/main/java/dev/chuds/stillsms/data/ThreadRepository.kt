@@ -32,8 +32,11 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -47,10 +50,15 @@ class ThreadRepository(
 ) {
 
     private val resolver = context.contentResolver
+    private val threadRefreshes = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     /** All threads, newest-first. Updates whenever the mms-sms provider notifies a change. */
-    fun observeThreads(): Flow<List<Thread>> = observeUri(Telephony.MmsSms.CONTENT_URI) {
+    fun observeThreads(): Flow<List<Thread>> = observeUri(Telephony.MmsSms.CONTENT_URI, threadRefreshes) {
         queryThreads()
+    }
+
+    fun refreshThreads() {
+        threadRefreshes.tryEmit(Unit)
     }
 
     /** Messages inside one thread, oldest-first. */
@@ -137,7 +145,11 @@ class ThreadRepository(
             runCatching { resolver.delete(uri, null, null) }
         }
 
-    private fun <T> observeUri(uri: Uri, block: suspend () -> T): Flow<T> = callbackFlow {
+    private fun <T> observeUri(
+        uri: Uri,
+        extraRefreshes: Flow<Unit> = emptyFlow(),
+        block: suspend () -> T,
+    ): Flow<T> = callbackFlow {
         val ticks = Channel<Unit>(capacity = Channel.CONFLATED)
         val handler = Handler(Looper.getMainLooper())
         val observer = object : ContentObserver(handler) {
@@ -171,6 +183,10 @@ class ThreadRepository(
                 delay(OBSERVER_DEBOUNCE_MS)
                 refresh()
             }
+        }
+
+        scope.launch {
+            extraRefreshes.collect { refresh() }
         }
 
         awaitClose {
