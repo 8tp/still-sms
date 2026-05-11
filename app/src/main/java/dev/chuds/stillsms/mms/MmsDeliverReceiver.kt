@@ -15,8 +15,10 @@ import dev.chuds.stillsms.data.PreferencesRepository
 import dev.chuds.stillsms.notif.NewMessageNotifier
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 
 /**
  * WAP_PUSH_DELIVER receiver. The system delivers inbound MMS notifications (M-Notification.ind
@@ -35,6 +37,19 @@ class MmsDeliverReceiver : BroadcastReceiver() {
         val pdu = intent.getByteArrayExtra("data") ?: return
         val ctx = context.applicationContext
 
+        // goAsync() because the DataStore read in mmsAutoDownloadOnMobile() can sit on
+        // a cold-start disk IO and blow the ~10s ANR budget on the broadcast thread.
+        val pending = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                handle(ctx, pdu)
+            } finally {
+                pending.finish()
+            }
+        }
+    }
+
+    private suspend fun handle(ctx: Context, pdu: ByteArray) {
         val notif = runCatching { MmsPduDecoder.parseNotificationInd(pdu) }.getOrNull() ?: return
         val location = notif.contentLocation ?: return
         if (BlockListRepository(ctx).isBlocked(notif.from)) return
@@ -103,12 +118,9 @@ class MmsDeliverReceiver : BroadcastReceiver() {
             putExtra(MmsDownloadReceiver.EXTRA_DOWNLOAD_FILE, downloadFile.absolutePath)
             putExtra(MmsDownloadReceiver.EXTRA_FROM, notif.from)
         }
-        // Don't naively .toInt() the row id — the inbox grows monotonically and a
-        // long-lived inbox will overflow Int. Hash the URI string instead so two
-        // inbound MMS in the same second still get distinct PendingIntent slots.
         val pi = PendingIntent.getBroadcast(
             ctx,
-            placeholderUri.toString().hashCode(),
+            MmsPendingIntents.nextRequestCode(ctx),
             downloadIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
         )
@@ -129,10 +141,8 @@ class MmsDeliverReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun mmsAutoDownloadOnMobile(context: Context): Boolean =
+    private suspend fun mmsAutoDownloadOnMobile(context: Context): Boolean =
         runCatching {
-            runBlocking {
-                PreferencesRepository(context).settings.first().mmsAutoDownloadOnMobile
-            }
+            PreferencesRepository(context).settings.first().mmsAutoDownloadOnMobile
         }.getOrDefault(true)
 }
