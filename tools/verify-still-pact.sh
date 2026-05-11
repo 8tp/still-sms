@@ -184,6 +184,7 @@ def merged_manifests():
     patterns = [
         "merged_manifest/**/AndroidManifest.xml",
         "merged_manifests/**/AndroidManifest.xml",
+        "packaged_manifests/**/AndroidManifest.xml",
     ]
     paths = []
     seen = set()
