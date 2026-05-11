@@ -8,9 +8,11 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Telephony
+import dev.chuds.stillsms.data.BlockListRepository
 import dev.chuds.stillsms.data.ContactNameResolver
 import dev.chuds.stillsms.notif.NewMessageNotifier
 import java.io.File
+import java.io.OutputStream
 
 /**
  * downloadedIntent target for SmsManager.downloadMultimediaMessage(). Once the carrier
@@ -42,106 +44,171 @@ class MmsDownloadReceiver : BroadcastReceiver() {
 
         val file = File(downloadPath)
         if (resultCode != Activity.RESULT_OK || !file.exists() || file.length() == 0L) {
-            markRetrieveFailed(ctx, placeholderUri)
+            markRetrieveFailed(ctx, placeholderUri, notifFrom)
+            runCatching { file.delete() }
             return
         }
 
         val pdu = runCatching { file.readBytes() }.getOrNull() ?: run {
-            markRetrieveFailed(ctx, placeholderUri); return
+            markRetrieveFailed(ctx, placeholderUri, notifFrom)
+            runCatching { file.delete() }
+            return
         }
         val parsed = runCatching { MmsPduDecoder.parseRetrieveConf(pdu) }.getOrNull() ?: run {
-            markRetrieveFailed(ctx, placeholderUri); return
+            markRetrieveFailed(ctx, placeholderUri, notifFrom)
+            runCatching { file.delete() }
+            return
         }
 
         val mmsId = ContentUris.parseId(placeholderUri)
         val from = parsed.from ?: notifFrom
-
-        // Update the placeholder with the address-derived thread id and subject.
-        val threadId = if (!from.isNullOrBlank())
-            runCatching { Telephony.Threads.getOrCreateThreadId(ctx, from) }.getOrDefault(-1L)
-        else -1L
-
-        ctx.contentResolver.update(
-            placeholderUri,
-            ContentValues().apply {
-                if (threadId > 0) put(Telephony.Mms.THREAD_ID, threadId)
-                if (!parsed.subject.isNullOrBlank()) put(Telephony.Mms.SUBJECT, parsed.subject)
-            },
-            null, null,
-        )
-
-        // Insert FROM address row.
-        if (!from.isNullOrBlank()) {
-            ctx.contentResolver.insert(
-                Uri.parse("content://mms/$mmsId/addr"),
-                ContentValues().apply {
-                    put("address", from)
-                    put("type", 137)            // PduHeaders.FROM
-                    put("charset", 106)
-                    put("msg_id", mmsId)
-                },
-            )
+        if (BlockListRepository(ctx).isBlocked(from)) {
+            runCatching { ctx.contentResolver.delete(placeholderUri, null, null) }
+            runCatching { file.delete() }
+            return
         }
 
-        // Walk parts. SMIL is metadata; everything else is real content.
+        var threadId = -1L
         var snippet: String? = null
-        for (part in parsed.parts) {
-            val ct = part.contentType
-            val ext = when {
-                ct.equals("image/jpeg", true) -> "jpg"
-                ct.equals("image/png", true) -> "png"
-                ct.equals("image/gif", true) -> "gif"
-                ct.equals("text/plain", true) -> "txt"
-                else -> "bin"
-            }
-            val partValues = ContentValues().apply {
-                put(Telephony.Mms.Part.MSG_ID, mmsId)
-                put(Telephony.Mms.Part.CONTENT_TYPE, ct)
-                if (part.contentId != null) put(Telephony.Mms.Part.CONTENT_ID, "<${part.contentId}>")
-                put(Telephony.Mms.Part.CONTENT_LOCATION, part.contentLocation ?: ("part.$ext"))
-                if (ct.equals("text/plain", true)) {
-                    val text = String(part.data, Charsets.UTF_8)
-                    put(Telephony.Mms.Part.CHARSET, 106)
-                    put(Telephony.Mms.Part.TEXT, text)
-                    if (snippet == null) snippet = text
-                }
-                if (part.name != null) put(Telephony.Mms.Part.NAME, part.name)
-            }
-            val partUri = ctx.contentResolver.insert(
-                Uri.parse("content://mms/$mmsId/part"), partValues,
-            ) ?: continue
-            // Binary bodies need to be streamed to the part's openOutputStream.
-            if (!ct.equals("text/plain", true)) {
-                runCatching {
-                    ctx.contentResolver.openOutputStream(partUri)?.use { it.write(part.data) }
-                }
-            }
-        }
-
-        // Done — clean up the staging file. Best-effort; harmless if it fails.
-        runCatching { file.delete() }
-
-        if (!from.isNullOrBlank()) {
-            val sender = ContactNameResolver(ctx).displayName(from) ?: from
-            NewMessageNotifier.post(
-                context = ctx,
-                threadId = if (threadId > 0) threadId else mmsId,
-                address = from,
-                sender = sender,
-                preview = snippet ?: "[image]",
-            )
-        }
-    }
-
-    private fun markRetrieveFailed(context: Context, placeholderUri: Uri) {
-        runCatching {
-            context.contentResolver.update(
+        try {
+            // Update the placeholder with the address-derived thread id and subject.
+            threadId = seedInboundMmsAddress(ctx, placeholderUri, from)
+            val updated = ctx.contentResolver.update(
                 placeholderUri,
                 ContentValues().apply {
-                    put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_FAILED)
+                    if (threadId > 0) put(Telephony.Mms.THREAD_ID, threadId)
+                    if (!parsed.subject.isNullOrBlank()) put(Telephony.Mms.SUBJECT, parsed.subject)
                 },
                 null, null,
             )
+            if (updated <= 0) error("MMS placeholder no longer exists")
+
+            snippet = persistMmsParts(
+                parsed.parts,
+                ContentResolverMmsPartSink(ctx, mmsId),
+            )
+        } catch (_: Exception) {
+            markRetrieveFailed(ctx, placeholderUri, from)
+            return
+        } finally {
+            // Done — clean up the staging file. Best-effort; harmless if it fails.
+            runCatching { file.delete() }
         }
+
+        notifyInboundMms(ctx, from, threadId, mmsId, snippet)
+    }
+
+    private fun notifyInboundMms(
+        context: Context,
+        from: String?,
+        threadId: Long,
+        mmsId: Long,
+        snippet: String?,
+    ) {
+        if (from.isNullOrBlank()) return
+        val sender = ContactNameResolver(context).displayName(from) ?: from
+        NewMessageNotifier.post(
+            context = context,
+            threadId = if (threadId > 0) threadId else mmsId,
+            address = from,
+            sender = sender,
+            preview = snippet ?: "[image]",
+        )
+    }
+
+    private fun markRetrieveFailed(context: Context, placeholderUri: Uri, from: String?) {
+        markInboundMmsRetrieveFailed(context, placeholderUri, from)
+    }
+}
+
+internal data class MmsProviderPart(
+    val contentType: String,
+    val contentId: String?,
+    val contentLocation: String,
+    val name: String?,
+    val text: String?,
+    val binaryData: ByteArray?,
+)
+
+internal interface MmsPartSink<PartId> {
+    fun insert(part: MmsProviderPart): PartId?
+    fun openOutputStream(partId: PartId): OutputStream?
+    fun delete(partId: PartId)
+}
+
+internal fun <PartId> persistMmsParts(
+    parts: List<MmsPduDecoder.RetrievePart>,
+    sink: MmsPartSink<PartId>,
+): String? {
+    val inserted = mutableListOf<PartId>()
+    var snippet: String? = null
+    try {
+        for (part in parts) {
+            val providerPart = part.toProviderPart()
+            val partId = sink.insert(providerPart) ?: error("MMS part insert failed")
+            inserted += partId
+            providerPart.binaryData?.let { data ->
+                val stream = sink.openOutputStream(partId) ?: error("MMS part stream unavailable")
+                stream.use { it.write(data) }
+            }
+            if (snippet == null && providerPart.text != null) snippet = providerPart.text
+        }
+        return snippet
+    } catch (e: Exception) {
+        inserted.asReversed().forEach { partId ->
+            runCatching { sink.delete(partId) }
+        }
+        throw e
+    }
+}
+
+private fun MmsPduDecoder.RetrievePart.toProviderPart(): MmsProviderPart {
+    val ext = when {
+        contentType.equals("image/jpeg", true) -> "jpg"
+        contentType.equals("image/png", true) -> "png"
+        contentType.equals("image/gif", true) -> "gif"
+        contentType.equals("text/plain", true) -> "txt"
+        else -> "bin"
+    }
+    val text = if (contentType.equals("text/plain", true)) {
+        String(data, Charsets.UTF_8)
+    } else {
+        null
+    }
+    return MmsProviderPart(
+        contentType = contentType,
+        contentId = contentId,
+        contentLocation = contentLocation ?: "part.$ext",
+        name = name,
+        text = text,
+        binaryData = if (text == null) data else null,
+    )
+}
+
+private class ContentResolverMmsPartSink(
+    private val context: Context,
+    private val mmsId: Long,
+) : MmsPartSink<Uri> {
+    override fun insert(part: MmsProviderPart): Uri? =
+        context.contentResolver.insert(
+            Uri.parse("content://mms/$mmsId/part"),
+            ContentValues().apply {
+                put(Telephony.Mms.Part.MSG_ID, mmsId)
+                put(Telephony.Mms.Part.CONTENT_TYPE, part.contentType)
+                if (part.contentId != null) put(Telephony.Mms.Part.CONTENT_ID, "<${part.contentId}>")
+                put(Telephony.Mms.Part.CONTENT_LOCATION, part.contentLocation)
+                if (part.text != null) {
+                    put(Telephony.Mms.Part.CHARSET, 106)
+                    put(Telephony.Mms.Part.TEXT, part.text)
+                }
+                if (part.name != null) put(Telephony.Mms.Part.NAME, part.name)
+            },
+        )
+
+    override fun openOutputStream(partId: Uri): OutputStream? =
+        context.contentResolver.openOutputStream(partId)
+
+    override fun delete(partId: Uri) {
+        context.contentResolver.delete(partId, null, null)
     }
 }

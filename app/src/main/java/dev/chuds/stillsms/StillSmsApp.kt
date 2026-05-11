@@ -64,7 +64,7 @@ import kotlinx.coroutines.launch
 
 private sealed interface Route {
     data object Threads : Route
-    data class Thread(val threadId: Long, val address: String) : Route
+    data class Thread(val threadId: Long, val address: String, val prefillBody: String? = null) : Route
     data object Settings : Route
     data object BlockList : Route
 }
@@ -74,6 +74,8 @@ fun StillSmsApp(
     initialThreadId: Long? = null,
     initialAddress: String? = null,
     initialPrefillBody: String? = null,
+    onInitialThreadHandled: () -> Unit = {},
+    onInitialComposeHandled: () -> Unit = {},
 ) {
     val context = LocalContext.current.applicationContext
     val activityContext = LocalContext.current
@@ -113,20 +115,27 @@ fun StillSmsApp(
         )
     }
     val threads by threadsFlow.collectAsState()
+    LaunchedEffect(isDefault) {
+        if (isDefault) threadRepository.refreshThreads()
+    }
 
     val blocked by blockListRepository.blocked.collectAsState()
 
     var route by remember { mutableStateOf<Route>(Route.Threads) }
+    var pendingComposePrefill by remember { mutableStateOf(initialPrefillBody) }
     LaunchedEffect(initialThreadId, threads) {
         val tid = initialThreadId ?: return@LaunchedEffect
         val match = threads.firstOrNull { it.id == tid } ?: return@LaunchedEffect
         route = Route.Thread(tid, match.address)
+        onInitialThreadHandled()
     }
     // ACTION_SENDTO landed in MainActivity → resolve to a Thread route by address.
-    LaunchedEffect(initialAddress) {
+    LaunchedEffect(initialAddress, initialPrefillBody) {
         val addr = initialAddress?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
         val tid = threadRepository.threadIdForAddress(addr)
-        route = Route.Thread(tid, addr)
+        route = Route.Thread(tid, addr, initialPrefillBody)
+        pendingComposePrefill = null
+        onInitialComposeHandled()
     }
 
     BackHandler(enabled = route !is Route.Threads) {
@@ -207,8 +216,15 @@ fun StillSmsApp(
     val contactPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
-        if (result.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
-        val data = result.data?.data ?: return@rememberLauncherForActivityResult
+        if (result.resultCode != Activity.RESULT_OK) {
+            pendingComposePrefill = null
+            return@rememberLauncherForActivityResult
+        }
+        val data = result.data?.data
+        if (data == null) {
+            pendingComposePrefill = null
+            return@rememberLauncherForActivityResult
+        }
         // Two shapes work here:
         //   1) An ACTION_PICK against vnd.android.cursor.dir/contact returns a contact URI;
         //      we read the lookup key and pull the primary phone.
@@ -218,7 +234,11 @@ fun StillSmsApp(
             val number = resolvePickedNumber(activityContext, data)
             if (!number.isNullOrBlank()) {
                 val tid = threadRepository.threadIdForAddress(number)
-                route = Route.Thread(tid, number)
+                val prefill = pendingComposePrefill
+                pendingComposePrefill = null
+                route = Route.Thread(tid, number, prefill)
+            } else {
+                pendingComposePrefill = null
             }
         }
     }
@@ -257,7 +277,12 @@ fun StillSmsApp(
                         settings = settings,
                         isDefaultApp = isDefault,
                         onRequestDefault = ::requestRole,
-                        onOpenThread = { thread -> route = Route.Thread(thread.id, thread.address) },
+                        // Tapping an existing thread is not a forward target. Any pending
+                        // SENDTO prefill stays queued for the explicit compose flow below
+                        // and is consumed there once the user picks a recipient.
+                        onOpenThread = { thread ->
+                            route = Route.Thread(thread.id, thread.address)
+                        },
                         onLongPressThread = { thread -> longPressedThread = thread },
                         onCompose = {
                             val pickIntent = Intent(Intent.ACTION_PICK).apply {
@@ -296,6 +321,7 @@ fun StillSmsApp(
                             messages = messages,
                             settings = settings,
                             canSend = isDefault && resolvedAddress.isNotBlank(),
+                            initialDraft = current.prefillBody.orEmpty(),
                             onSend = { body ->
                                 scope.launch {
                                     val sentUri = SmsSender.send(activityContext, resolvedAddress, body)
@@ -388,8 +414,9 @@ fun StillSmsApp(
                         },
                         StillAction(label = "block") {
                             scope.launch {
-                                blockListRepository.add(th.address)
-                                threadRepository.deleteThread(th.id)
+                                if (blockListRepository.add(th.address)) {
+                                    threadRepository.deleteThread(th.id)
+                                }
                             }
                         },
                         StillAction(label = "delete", destructive = true) {

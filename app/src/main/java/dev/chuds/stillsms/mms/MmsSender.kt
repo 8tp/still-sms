@@ -32,6 +32,7 @@ object MmsSender {
 
     const val ACTION_SENT = "dev.chuds.stillsms.MMS_SENT"
     const val EXTRA_MESSAGE_URI = "still_sms.mms_uri"
+    const val EXTRA_PDU_FILE = "still_sms.mms.pdu_file"
 
     /**
      * Send an MMS to [address] with optional [body] text and a single [imageUri] attachment.
@@ -69,67 +70,58 @@ object MmsSender {
             ?: return@withContext null
         val mmsId = ContentUris.parseId(mmsUri)
 
-        // 2. Insert the recipient address row (TO=151).
-        val addrValues = ContentValues().apply {
-            put("address", address)
-            put("type", 151)             // PduHeaders.TO
-            put("charset", 106)          // UTF-8
-            put("msg_id", mmsId)
-        }
+        // 2. Insert provider metadata and hand off the wire-format M-Send.req PDU. Any exception
+        //    after the provider row exists must flip that row to FAILED so it never
+        //    sits forever in outbox or ships carrier-side without matching local history.
+        var pduFile: File? = null
         runCatching {
-            ctx.contentResolver.insert(Uri.parse("content://mms/$mmsId/addr"), addrValues)
-        }
-
-        // 3. Insert body parts so renderers see them immediately. SMIL part is implied by
-        //    the multipart/related content-type and isn't strictly needed in the provider
-        //    rows for our own UI; we still write a text part if there's a caption, plus
-        //    an image part with the local image bytes.
-        if (!body.isNullOrBlank()) {
-            insertTextPart(ctx, mmsId, body)
-        }
-        insertImagePart(ctx, mmsId, mimeType, imageBytes)
-
-        // 4. Build the wire-format M-Send.req PDU and stage it in cacheDir.
-        val parts = buildList<Part> {
-            add(buildSmilPart(hasText = !body.isNullOrBlank(), imageName = "image", imageMime = mimeType))
-            if (!body.isNullOrBlank()) add(buildTextPart(body))
-            add(buildImagePart(imageBytes, mimeType))
-        }
-        val pduBytes = MmsPduEncoder.encodeSendReq(
-            recipient = address,
-            subject = null,
-            parts = parts,
-        )
-
-        val pduFile = stagePduFile(ctx, pduBytes)
-        val pduUri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", pduFile)
-        // The modem-side process is com.android.phone on AOSP / GrapheneOS, but some OEM
-        // forks (Samsung, Xiaomi) route MMS through com.android.mms.service. Grant both;
-        // the unused grant is a no-op when the package isn't installed.
-        for (target in listOf("com.android.phone", "com.android.mms.service")) {
-            runCatching {
-                ctx.grantUriPermission(target, pduUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            insertRecipientAddress(ctx, mmsId, address)
+            if (!body.isNullOrBlank()) {
+                insertTextPart(ctx, mmsId, body)
             }
-        }
+            insertImagePart(ctx, mmsId, mimeType, imageBytes)
 
-        // 5. Hand off to SmsManager. The sentIntent fires once the carrier handshake
-        //    resolves (success or failure) — see MmsSentReceiver.
-        val sentIntent = Intent(ctx, MmsSentReceiver::class.java).apply {
-            action = ACTION_SENT
-            data = mmsUri
-            putExtra(EXTRA_MESSAGE_URI, mmsUri.toString())
-        }
-        val pi = PendingIntent.getBroadcast(
-            ctx,
-            (mmsId * 31).toInt(),
-            sentIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
-        )
+            val parts = buildList<Part> {
+                add(buildSmilPart(hasText = !body.isNullOrBlank(), imageName = "image", imageMime = mimeType))
+                if (!body.isNullOrBlank()) add(buildTextPart(body))
+                add(buildImagePart(imageBytes, mimeType))
+            }
+            val pduBytes = MmsPduEncoder.encodeSendReq(
+                recipient = address,
+                subject = null,
+                parts = parts,
+            )
 
-        runCatching {
+            val stagedFile = stagePduFile(ctx, pduBytes)
+            pduFile = stagedFile
+            val pduUri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", stagedFile)
+            // The modem-side process is com.android.phone on AOSP / GrapheneOS, but some OEM
+            // forks (Samsung, Xiaomi) route MMS through com.android.mms.service. Grant both;
+            // the unused grant is a no-op when the package isn't installed.
+            for (target in listOf("com.android.phone", "com.android.mms.service")) {
+                runCatching {
+                    ctx.grantUriPermission(target, pduUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            }
+
+            // The sentIntent fires once the carrier handshake resolves (success or
+            // failure) — see MmsSentReceiver.
+            val sentIntent = Intent(ctx, MmsSentReceiver::class.java).apply {
+                action = ACTION_SENT
+                data = mmsUri
+                putExtra(EXTRA_MESSAGE_URI, mmsUri.toString())
+                putExtra(EXTRA_PDU_FILE, stagedFile.absolutePath)
+            }
+            val pi = PendingIntent.getBroadcast(
+                ctx,
+                mmsUri.toString().hashCode(),
+                sentIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+            )
             mmsManager(ctx).sendMultimediaMessage(ctx, pduUri, null, null, pi)
         }.onFailure {
             markFailed(ctx, mmsUri)
+            pduFile?.let { file -> runCatching { file.delete() } }
         }
 
         mmsUri
@@ -151,6 +143,17 @@ object MmsSender {
 
     // --- provider writes ---
 
+    private fun insertRecipientAddress(context: Context, mmsId: Long, address: String) {
+        val v = ContentValues().apply {
+            put("address", address)
+            put("type", 151)             // PduHeaders.TO
+            put("charset", 106)          // UTF-8
+            put("msg_id", mmsId)
+        }
+        context.contentResolver.insert(Uri.parse("content://mms/$mmsId/addr"), v)
+            ?: error("MMS address insert failed")
+    }
+
     private fun insertTextPart(context: Context, mmsId: Long, text: String) {
         val v = ContentValues().apply {
             put(Telephony.Mms.Part.MSG_ID, mmsId)
@@ -160,9 +163,8 @@ object MmsSender {
             put(Telephony.Mms.Part.CHARSET, 106)
             put(Telephony.Mms.Part.TEXT, text)
         }
-        runCatching {
-            context.contentResolver.insert(Uri.parse("content://mms/$mmsId/part"), v)
-        }
+        context.contentResolver.insert(Uri.parse("content://mms/$mmsId/part"), v)
+            ?: error("MMS text part insert failed")
     }
 
     private fun insertImagePart(context: Context, mmsId: Long, mime: String, bytes: ByteArray) {
@@ -178,12 +180,11 @@ object MmsSender {
             put(Telephony.Mms.Part.CONTENT_LOCATION, "image.$ext")
             put(Telephony.Mms.Part.NAME, "image.$ext")
         }
-        val partUri = runCatching {
-            context.contentResolver.insert(Uri.parse("content://mms/$mmsId/part"), v)
-        }.getOrNull() ?: return
-        runCatching {
-            context.contentResolver.openOutputStream(partUri)?.use { it.write(bytes) }
-        }
+        val partUri = context.contentResolver.insert(Uri.parse("content://mms/$mmsId/part"), v)
+            ?: error("MMS image part insert failed")
+        val stream = context.contentResolver.openOutputStream(partUri)
+            ?: error("MMS image part stream unavailable")
+        stream.use { it.write(bytes) }
     }
 
     // --- pdu staging ---

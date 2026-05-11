@@ -7,9 +7,16 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import dev.chuds.stillsms.ui.theme.StillTheme
 
 class MainActivity : ComponentActivity() {
+
+    private var openThreadRequest by mutableStateOf<Long?>(null)
+    private var composeRecipientRequest by mutableStateOf<String?>(null)
+    private var composePrefillRequest by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -19,18 +26,42 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
 
-        val initialThreadId = consumeOpenThreadExtra(intent)
-        val composeRecipient = consumeComposeRecipient(intent)
-        val composePrefill = consumeComposePrefill(intent)
+        consumeLaunchIntent(intent)
 
         setContent {
             StillTheme {
                 StillSmsApp(
-                    initialThreadId = initialThreadId,
-                    initialAddress = composeRecipient,
-                    initialPrefillBody = composePrefill,
+                    initialThreadId = openThreadRequest,
+                    initialAddress = composeRecipientRequest,
+                    initialPrefillBody = composePrefillRequest,
+                    onInitialThreadHandled = { openThreadRequest = null },
+                    onInitialComposeHandled = {
+                        composeRecipientRequest = null
+                        composePrefillRequest = null
+                    },
                 )
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeLaunchIntent(intent)
+    }
+
+    private fun consumeLaunchIntent(intent: Intent?) {
+        val threadId = consumeOpenThreadExtra(intent)
+        if (threadId != null) {
+            openThreadRequest = threadId
+            return
+        }
+
+        val composeRecipient = consumeComposeRecipient(intent)
+        val composePrefill = consumeComposePrefill(intent)
+        if (composeRecipient != null) {
+            composeRecipientRequest = composeRecipient
+            composePrefillRequest = composePrefill
         }
     }
 

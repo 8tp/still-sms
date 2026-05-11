@@ -100,7 +100,7 @@ fun SettingsScreen(
                     onClick = onToggleMmsAutoDownload,
                 )
                 StillMenuItem(
-                    title = "blocked numbers",
+                    title = "blocked senders",
                     subtitle = "open list",
                     onClick = onOpenBlockList,
                 )

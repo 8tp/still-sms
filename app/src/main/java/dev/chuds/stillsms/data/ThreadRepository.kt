@@ -22,6 +22,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.Telephony
+import dev.chuds.stillsms.mms.MmsMessageType
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -31,8 +32,11 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -46,10 +50,15 @@ class ThreadRepository(
 ) {
 
     private val resolver = context.contentResolver
+    private val threadRefreshes = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     /** All threads, newest-first. Updates whenever the mms-sms provider notifies a change. */
-    fun observeThreads(): Flow<List<Thread>> = observeUri(Telephony.MmsSms.CONTENT_URI) {
+    fun observeThreads(): Flow<List<Thread>> = observeUri(Telephony.MmsSms.CONTENT_URI, threadRefreshes) {
         queryThreads()
+    }
+
+    fun refreshThreads() {
+        threadRefreshes.tryEmit(Unit)
     }
 
     /** Messages inside one thread, oldest-first. */
@@ -136,7 +145,11 @@ class ThreadRepository(
             runCatching { resolver.delete(uri, null, null) }
         }
 
-    private fun <T> observeUri(uri: Uri, block: suspend () -> T): Flow<T> = callbackFlow {
+    private fun <T> observeUri(
+        uri: Uri,
+        extraRefreshes: Flow<Unit> = emptyFlow(),
+        block: suspend () -> T,
+    ): Flow<T> = callbackFlow {
         val ticks = Channel<Unit>(capacity = Channel.CONFLATED)
         val handler = Handler(Looper.getMainLooper())
         val observer = object : ContentObserver(handler) {
@@ -170,6 +183,10 @@ class ThreadRepository(
                 delay(OBSERVER_DEBOUNCE_MS)
                 refresh()
             }
+        }
+
+        scope.launch {
+            extraRefreshes.collect { refresh() }
         }
 
         awaitClose {
@@ -307,17 +324,27 @@ class ThreadRepository(
 
         // MMS direction lives in msg_box, NOT the cursor's "type" alias (which holds
         // Mms.MESSAGE_TYPE — m-send-req=128 / m-retrieve-conf=132 / etc., not the inbox
-        // bucket). 1=inbox, 4=outbox, 2=sent, 5=failed.
+        // bucket). Failed inbound carrier downloads keep a FROM addr row, so preserve
+        // inbound direction even though the provider bucket is MESSAGE_BOX_FAILED.
+        // If the best-effort FROM row could not be written, the original retrieve-conf
+        // message type still distinguishes inbound failed downloads from failed sends.
         val msgBox = cursor.getInt(11)
-        val direction = when (msgBox) {
-            Telephony.Mms.MESSAGE_BOX_INBOX -> Direction.Inbound
-            else -> Direction.Outbound
-        }
+        val mmsMessageType = cursor.getInt(5)
         val failed = msgBox == Telephony.Mms.MESSAGE_BOX_FAILED
+        val fromAddress = mmsAddress(id, Direction.Inbound)
+        val direction = mmsDirectionFor(msgBox, fromAddress, mmsMessageType)
 
-        val text = mmsTextBody(id) ?: ""
         val attachment = mmsFirstImagePartUri(id)
-        val address = mmsAddress(id, direction) ?: ""
+        val text = mmsTextBody(id) ?: mmsFallbackBody(
+            msgBox = msgBox,
+            failed = failed,
+            attachmentUri = attachment,
+        )
+        val address = if (direction == Direction.Inbound) {
+            fromAddress
+        } else {
+            mmsAddress(id, Direction.Outbound)
+        } ?: ""
         return Message(
             id = id,
             threadId = threadId,
@@ -384,5 +411,29 @@ class ThreadRepository(
             }
             null
         }
+    }
+}
+
+internal fun mmsDirectionFor(
+    msgBox: Int,
+    fromAddress: String?,
+    messageType: Int? = null,
+): Direction = when {
+    msgBox == Telephony.Mms.MESSAGE_BOX_INBOX -> Direction.Inbound
+    msgBox == Telephony.Mms.MESSAGE_BOX_FAILED && messageType == MmsMessageType.M_RETRIEVE_CONF -> Direction.Inbound
+    msgBox == Telephony.Mms.MESSAGE_BOX_FAILED && !fromAddress.isNullOrBlank() -> Direction.Inbound
+    else -> Direction.Outbound
+}
+
+internal fun mmsFallbackBody(
+    msgBox: Int,
+    failed: Boolean,
+    attachmentUri: String?,
+): String {
+    if (attachmentUri != null) return ""
+    return when {
+        failed -> "[mms download failed]"
+        msgBox == Telephony.Mms.MESSAGE_BOX_INBOX -> "[mms not downloaded]"
+        else -> ""
     }
 }

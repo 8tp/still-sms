@@ -18,7 +18,9 @@ in the system role. Differentiates by removal, not by addition.
 
 These are anti-features for a reason. Document each in the README.
 
-- **No avatars or contact photos.** Initials in a 1-bit circle, or nothing.
+- **No remote avatars or custom avatar system.** System contact photos may
+  render when `ContactsContract` has one; otherwise show initials in a 1-bit
+  circle, or nothing.
 - **No reactions, stickers, GIF picker, emoji panel.** System keyboard handles
   emoji.
 - **No read receipts, delivery receipts, typing indicators.** SMS doesn't have
@@ -66,14 +68,16 @@ Single scroll, eight rows max. Per pact.
 - group mms (toggle, default off, with a paragraph explaining the bug surface)
 - mms auto-download on mobile data (toggle, default on)
 - default sim (cycle, on dual-sim devices only)
-- blocked numbers (opens `BlockListScreen`)
+- blocked senders (opens `BlockListScreen`)
 - export threads (writes `still-sms-YYYY-MM-DD.zip` with per-thread `.txt` to
   `Documents/`)
 
 ### bonus: `BlockListScreen`
-Lives under settings. List of blocked numbers, `add` verb opens a numeric
-entry, `remove` is long-press. Numbers are stored in the local block table; a
-`CallScreeningService`-style filter rejects matching SMS at `SMS_DELIVER` time.
+Lives under settings. List of blocked senders, `add` verb accepts E.164,
+national, short-code, and alphanumeric sender IDs; `remove` is long-press.
+Sender keys are stored in the local block table. SMS is rejected at
+`SMS_DELIVER` before any provider write, and MMS notification/retrieve paths are
+re-checked so blocked senders leave no placeholder, row, or notification.
 
 ## required manifest declarations
 
@@ -131,7 +135,7 @@ To be eligible for `RoleManager.ROLE_SMS`, all four must exist
 
 ## permissions
 
-Six runtime permissions, all disclosed honestly in README and About.
+Seven runtime permissions, all disclosed honestly in README and About.
 
 | permission | why |
 |---|---|
@@ -139,6 +143,7 @@ Six runtime permissions, all disclosed honestly in README and About.
 | `READ_SMS` | read the sms-mms provider to render threads |
 | `RECEIVE_SMS` | catch inbound SMS before SMS_DELIVER (compat) |
 | `RECEIVE_MMS` | catch inbound MMS WAP push |
+| `RECEIVE_WAP_PUSH` | receive `WAP_PUSH_DELIVER` MMS notification PDUs |
 | `READ_CONTACTS` | resolve numbers → display names |
 | `POST_NOTIFICATIONS` | Android 13+, new-message notifications |
 
@@ -163,11 +168,14 @@ data/
   PreferencesRepository.kt // DataStore for the settings toggles
 ```
 
-### blocked numbers
-Stored as a plaintext JSON list of normalized E.164 strings.
-`SmsDeliverReceiver` checks every inbound message against this list before
-inserting into the provider; matches are dropped silently (no notification, no
-provider write).
+### blocked senders
+Stored as a plaintext JSON list of canonical exact-match keys:
+`+15551234567` for strict E.164, `12345` for short/national numeric
+senders, and `BANK-ID` for alphanumeric sender IDs.
+`SmsDeliverReceiver` checks every inbound SMS before inserting into the
+provider. `MmsDeliverReceiver` checks before creating the placeholder/download,
+and `MmsDownloadReceiver` re-checks the retrieved sender before writing parts.
+Matches are dropped silently with no notification and no provider-visible row.
 
 ### threads list
 Use `Telephony.Threads.CONTENT_URI` with column `_id`, `recipient_ids`,
@@ -273,7 +281,7 @@ phone-number normalization lib; we lift Android's `PhoneNumberUtils`
 - **0.1** — read-only thread list and thread view. No sending. Shipping path:
   default-SMS role works (system delivers to our receivers); we just render.
 - **0.2** — outgoing SMS (1:1, text-only). Notifications + reply.
-- **0.3** — outgoing 1:1 MMS (image). Inbound MMS. Carrier gauntlet.
+- **0.3** — outgoing 1:1 MMS (image). Inbound MMS scaffolding.
 - **0.4** — block list, export. Settings page.
 - **0.5** — group MMS behind toggle. Search.
 - **1.0** — gauntlet pass across the four major US carriers + two EU.

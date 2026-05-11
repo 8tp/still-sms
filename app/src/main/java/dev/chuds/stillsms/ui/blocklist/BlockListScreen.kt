@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.unit.dp
+import dev.chuds.stillsms.data.BlockListMatcher
 import dev.chuds.stillsms.ui.components.StillDivider
 import dev.chuds.stillsms.ui.components.StillVerb
 import dev.chuds.stillsms.ui.theme.StillColors
@@ -39,6 +40,7 @@ fun BlockListScreen(
     onBack: () -> Unit,
 ) {
     var entry by rememberSaveable { mutableStateOf("") }
+    var error by rememberSaveable { mutableStateOf<String?>(null) }
 
     Box(
         modifier = Modifier
@@ -72,7 +74,10 @@ fun BlockListScreen(
             ) {
                 BasicTextField(
                     value = entry,
-                    onValueChange = { entry = it },
+                    onValueChange = {
+                        entry = it
+                        error = null
+                    },
                     singleLine = true,
                     textStyle = StillTypography.Body.copy(color = StillColors.SoftWhite),
                     cursorBrush = SolidColor(StillColors.SoftWhite),
@@ -82,11 +87,25 @@ fun BlockListScreen(
                     label = "add",
                     onClick = {
                         if (entry.isNotBlank()) {
-                            onAdd(entry.trim())
-                            entry = ""
+                            val normalized = BlockListMatcher.normalize(entry.trim())
+                            if (normalized == null) {
+                                error = "use number or sender id"
+                            } else {
+                                onAdd(normalized)
+                                entry = ""
+                                error = null
+                            }
                         }
                     },
                     enabled = entry.isNotBlank(),
+                )
+            }
+            error?.let { message ->
+                Text(
+                    text = message,
+                    style = StillTypography.Caption,
+                    color = StillColors.MutedWhite,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
             StillDivider()

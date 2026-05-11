@@ -12,10 +12,6 @@ package dev.chuds.stillsms.data
 
 import android.content.Context
 import android.net.Uri
-import dev.chuds.stillsms.data.Direction
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlinx.coroutines.Dispatchers
@@ -43,7 +39,7 @@ class ThreadExporter(
                     val baseName = sanitizeFilename(raw).ifBlank { "thread-${thread.id}" }
                     // Disambiguate when two threads collide on the same display name.
                     val name = uniquify(baseName, seenNames)
-                    val content = formatThread(thread, msgs)
+                    val content = ThreadExportFormatter.formatThread(thread, msgs)
                     zip.putNextEntry(ZipEntry("$name.txt"))
                     zip.write(content.toByteArray(Charsets.UTF_8))
                     zip.closeEntry()
@@ -53,27 +49,6 @@ class ThreadExporter(
         }
         ExportResult(threads.size, totalMessages, success = true)
     }
-
-    private fun formatThread(thread: Thread, messages: List<Message>): String {
-        val sb = StringBuilder(messages.size * 80)
-        sb.append("# ").append(thread.displayName ?: thread.address).append('\n')
-        if (thread.displayName != null && thread.displayName != thread.address) {
-            sb.append("# ").append(thread.address).append('\n')
-        }
-        sb.append('\n')
-        for (m in messages) {
-            sb.append(stamp(m.timestamp)).append("  ")
-            sb.append(if (m.direction == Direction.Outbound) "->" else "<-").append("  ")
-            // Single-line each message body. SMS doesn't carry meaningful newlines anyway.
-            val body = if (m.isMms && m.body.isBlank() && m.attachmentUri != null) "[image]"
-            else m.body.replace('\n', ' ').trim()
-            sb.append(body).append('\n')
-        }
-        return sb.toString()
-    }
-
-    private fun stamp(epochMillis: Long): String =
-        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(epochMillis))
 
     /** ASCII-conservative filename: keep letters, digits, +, -, _; collapse the rest to "_". */
     private fun sanitizeFilename(s: String): String {

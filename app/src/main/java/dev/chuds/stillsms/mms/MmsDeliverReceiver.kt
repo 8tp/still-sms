@@ -9,8 +9,14 @@ import android.net.Uri
 import android.provider.Telephony
 import android.telephony.SmsManager
 import androidx.core.content.FileProvider
+import dev.chuds.stillsms.data.BlockListRepository
+import dev.chuds.stillsms.data.ContactNameResolver
+import dev.chuds.stillsms.data.PreferencesRepository
+import dev.chuds.stillsms.notif.NewMessageNotifier
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 
 /**
  * WAP_PUSH_DELIVER receiver. The system delivers inbound MMS notifications (M-Notification.ind
@@ -24,30 +30,17 @@ import java.util.UUID
  */
 class MmsDeliverReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != Telephony.Sms.Intents.WAP_PUSH_DELIVER_ACTION) return
+
         val pdu = intent.getByteArrayExtra("data") ?: return
         val ctx = context.applicationContext
 
         val notif = runCatching { MmsPduDecoder.parseNotificationInd(pdu) }.getOrNull() ?: return
         val location = notif.contentLocation ?: return
+        if (BlockListRepository(ctx).isBlocked(notif.from)) return
 
-        // Stage a writable download target. We grant temporary read/write to com.android.phone
-        // so the modem-side process can stream the carrier's M-Retrieve.conf into our file.
-        val dir = File(ctx.cacheDir, "mms_inbox").apply { mkdirs() }
-        val downloadFile = File(dir, "${UUID.randomUUID()}.dat")
-        downloadFile.createNewFile()
-        val downloadUri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", downloadFile)
-        for (target in listOf("com.android.phone", "com.android.mms.service")) {
-            runCatching {
-                ctx.grantUriPermission(
-                    target,
-                    downloadUri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-                )
-            }
-        }
-
-        // Insert a placeholder MMS row so the thread list shows the inbound message
-        // immediately. We'll fill in the parts and address from the carrier response.
+        // Insert a placeholder MMS row immediately. We seed thread/address from the
+        // notification so download failures still render as inbound in the right thread.
         val placeholderValues = ContentValues().apply {
             put(Telephony.Mms.DATE, System.currentTimeMillis() / 1000)
             put(Telephony.Mms.READ, 0)
@@ -61,6 +54,46 @@ class MmsDeliverReceiver : BroadcastReceiver() {
         val placeholderUri = ctx.contentResolver.insert(
             Telephony.Mms.CONTENT_URI, placeholderValues,
         ) ?: return
+        val threadId = seedInboundMmsAddress(ctx, placeholderUri, notif.from)
+
+        if (!mmsAutoDownloadOnMobile(ctx)) {
+            if (threadId > 0 && !notif.from.isNullOrBlank()) {
+                val sender = ContactNameResolver(ctx).displayName(notif.from) ?: notif.from
+                NewMessageNotifier.post(
+                    context = ctx,
+                    threadId = threadId,
+                    address = notif.from,
+                    sender = sender,
+                    preview = notif.subject?.takeIf { it.isNotBlank() } ?: "[mms]",
+                )
+            }
+            return
+        }
+
+        // Stage a writable download target. We grant temporary read/write to com.android.phone
+        // so the modem-side process can stream the carrier's M-Retrieve.conf into our file.
+        var stagedFile: File? = null
+        val (downloadFile, downloadUri) = runCatching {
+            val dir = File(ctx.cacheDir, "mms_inbox").apply { mkdirs() }
+            val file = File(dir, "${UUID.randomUUID()}.dat")
+            file.createNewFile()
+            stagedFile = file
+            val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
+            for (target in listOf("com.android.phone", "com.android.mms.service")) {
+                runCatching {
+                    ctx.grantUriPermission(
+                        target,
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                    )
+                }
+            }
+            file to uri
+        }.getOrElse {
+            markInboundMmsRetrieveFailed(ctx, placeholderUri, notif.from)
+            runCatching { stagedFile?.delete() }
+            return
+        }
 
         // Hand off the download.
         val downloadIntent = Intent(ctx, MmsDownloadReceiver::class.java).apply {
@@ -81,6 +114,9 @@ class MmsDeliverReceiver : BroadcastReceiver() {
         )
         runCatching {
             mmsManager(ctx).downloadMultimediaMessage(ctx, location, downloadUri, null, pi)
+        }.onFailure {
+            markInboundMmsRetrieveFailed(ctx, placeholderUri, notif.from)
+            runCatching { downloadFile.delete() }
         }
     }
 
@@ -92,4 +128,11 @@ class MmsDeliverReceiver : BroadcastReceiver() {
             SmsManager.getDefault()
         }
     }
+
+    private fun mmsAutoDownloadOnMobile(context: Context): Boolean =
+        runCatching {
+            runBlocking {
+                PreferencesRepository(context).settings.first().mmsAutoDownloadOnMobile
+            }
+        }.getOrDefault(true)
 }
