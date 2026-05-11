@@ -48,3 +48,21 @@ internal fun seedInboundMmsAddress(
     )
     return threadId
 }
+
+internal fun markInboundMmsRetrieveFailed(
+    context: Context,
+    mmsUri: Uri,
+    from: String?,
+) {
+    runCatching {
+        seedInboundMmsAddress(context, mmsUri, from)
+        context.contentResolver.update(
+            mmsUri,
+            ContentValues().apply {
+                put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_FAILED)
+            },
+            null,
+            null,
+        )
+    }
+}

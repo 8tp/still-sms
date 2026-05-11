@@ -66,14 +66,16 @@ Single scroll, eight rows max. Per pact.
 - group mms (toggle, default off, with a paragraph explaining the bug surface)
 - mms auto-download on mobile data (toggle, default on)
 - default sim (cycle, on dual-sim devices only)
-- blocked numbers (opens `BlockListScreen`)
+- blocked senders (opens `BlockListScreen`)
 - export threads (writes `still-sms-YYYY-MM-DD.zip` with per-thread `.txt` to
   `Documents/`)
 
 ### bonus: `BlockListScreen`
-Lives under settings. List of blocked numbers, `add` verb opens a numeric
-entry, `remove` is long-press. Numbers are stored in the local block table; a
-`CallScreeningService`-style filter rejects matching SMS at `SMS_DELIVER` time.
+Lives under settings. List of blocked senders, `add` verb accepts E.164,
+national, short-code, and alphanumeric sender IDs; `remove` is long-press.
+Sender keys are stored in the local block table. SMS is rejected at
+`SMS_DELIVER` before any provider write, and MMS notification/retrieve paths are
+re-checked so blocked senders leave no placeholder, row, or notification.
 
 ## required manifest declarations
 
@@ -164,13 +166,14 @@ data/
   PreferencesRepository.kt // DataStore for the settings toggles
 ```
 
-### blocked numbers
+### blocked senders
 Stored as a plaintext JSON list of canonical exact-match keys:
 `+15551234567` for strict E.164, `12345` for short/national numeric
 senders, and `BANK-ID` for alphanumeric sender IDs.
-`SmsDeliverReceiver` checks every inbound message against this list before
-inserting into the provider; matches are dropped silently (no notification, no
-provider write).
+`SmsDeliverReceiver` checks every inbound SMS before inserting into the
+provider. `MmsDeliverReceiver` checks before creating the placeholder/download,
+and `MmsDownloadReceiver` re-checks the retrieved sender before writing parts.
+Matches are dropped silently with no notification and no provider-visible row.
 
 ### threads list
 Use `Telephony.Threads.CONTENT_URI` with column `_id`, `recipient_ids`,

@@ -103,6 +103,9 @@ class MmsDeliverReceiver : BroadcastReceiver() {
         )
         runCatching {
             mmsManager(ctx).downloadMultimediaMessage(ctx, location, downloadUri, null, pi)
+        }.onFailure {
+            markInboundMmsRetrieveFailed(ctx, placeholderUri, notif.from)
+            runCatching { downloadFile.delete() }
         }
     }
 

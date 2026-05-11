@@ -32,7 +32,7 @@ It declares no internet permission. It ships no analytics. It depends on neither
 - **Inbound MMS** via `WAP_PUSH_DELIVER` → `SmsManager.downloadMultimediaMessage`. The retrieved M-Retrieve.conf is parsed by `MmsPduDecoder.kt` and walked into `content://mms/<id>/part` rows.
 - **Live notifications** via a single `messages` channel — heads-up, sender display name, message preview, with a `reply` (RemoteInput) action and a `mark read` action. No "delivered" / "read" surfaces ever, per the pact.
 - **Contact name + photo sync** with the system `ContactsContract` provider, so a row stored in [Still Contacts](../still-contacts) (or any other contacts app) renders here as a name and a real photo bubble.
-- A **block list** stored as plaintext JSON in `filesDir/blocked.json`; matched at `SMS_DELIVER` time before the provider write so blocked senders leave no trace.
+- A **block list** stored as plaintext JSON in `filesDir/blocked.json`; exact-matched against E.164, national, short-code, and alphanumeric sender IDs. SMS is blocked before any provider write; MMS is blocked before placeholder/download and re-checked after retrieve.
 - **Long-press** on a thread row → `archive` / `block` / `delete` action sheet. Long-press on a message → `copy` / `forward` / `delete`.
 - **Default SMS app role** integration via `RoleManager`. A persistent banner on the thread list explains why the role is required when it isn't held; a `make default sms app` row in settings re-prompts.
 - **Plaintext export** to `still-sms-YYYY-MM-DD.zip` via SAF — one `.txt` per thread, named `<display-name-or-number>.txt`, formatted as `YYYY-MM-DD HH:MM  ->  body` (outbound) / `<-  body` (inbound). `cat`-able by design.
@@ -71,7 +71,7 @@ None of these involve the network. None pull a third-party SDK.
 | `app/src/main/res/xml/data_extraction_rules.xml` | Excludes every sharedpref / file / database domain from cloud backup and device transfer. |
 | `app/build.gradle.kts` | Dependencies only on AndroidX, Compose, and DataStore — no Firebase, no GMS, no analytics SDK, no `smsmms` / Klinker library. |
 | `app/src/main/java/dev/chuds/stillsms/mms/` | Hand-rolled M-Send.req encoder + M-Notification.ind / M-Retrieve.conf decoder; no third-party PDU library. Wire format from OMA-WAP-MMS-ENC-V1_3 §7 + OMA-WAP-WSP-V1_0 §8.4. |
-| `app/src/main/java/dev/chuds/stillsms/data/BlockListRepository.kt` | Plaintext JSON in `filesDir/blocked.json`. SmsDeliverReceiver checks before any provider write so blocked senders leave no row, no notification. |
+| `app/src/main/java/dev/chuds/stillsms/data/BlockListRepository.kt` | Plaintext JSON in `filesDir/blocked.json`. SMS and MMS receiver paths check exact canonical sender keys before provider writes/downloads so blocked senders leave no row, no notification. |
 | `app/src/main/java/dev/chuds/stillsms/notif/NewMessageNotifier.kt` | Notification text never contains "delivered", "read", or "seen". `setAllowGeneratedReplies(false)` so no on-device LLM reply suggestions. |
 
 ## Architecture

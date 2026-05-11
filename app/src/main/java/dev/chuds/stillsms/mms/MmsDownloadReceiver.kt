@@ -125,15 +125,6 @@ class MmsDownloadReceiver : BroadcastReceiver() {
     }
 
     private fun markRetrieveFailed(context: Context, placeholderUri: Uri, from: String?) {
-        runCatching {
-            seedInboundMmsAddress(context, placeholderUri, from)
-            context.contentResolver.update(
-                placeholderUri,
-                ContentValues().apply {
-                    put(Telephony.Mms.MESSAGE_BOX, Telephony.Mms.MESSAGE_BOX_FAILED)
-                },
-                null, null,
-            )
-        }
+        markInboundMmsRetrieveFailed(context, placeholderUri, from)
     }
 }

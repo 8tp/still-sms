@@ -188,6 +188,11 @@ def merged_manifests():
     return sorted(paths)
 
 
+def latest_input_mtime():
+    paths = source_manifests()
+    return max((path.stat().st_mtime for path in paths if path.is_file()), default=0.0)
+
+
 def readme_permission_count(path: Path):
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip().lower()
@@ -295,6 +300,17 @@ if manifest.is_file() and expected_permissions is not None:
         merged_manifest_paths = merged_manifests()
         if not merged_manifest_paths:
             errors.append(f"{name}: no merged manifests found; run :app:assembleDebug before verifier")
+        input_mtime = latest_input_mtime()
+        stale_merged = [
+            rel(path)
+            for path in merged_manifest_paths
+            if path.stat().st_mtime < input_mtime
+        ]
+        if stale_merged:
+            errors.append(
+                f"{name}: merged manifests are older than source manifests; "
+                f"run :app:assembleDebug before verifier: {format_values(stale_merged)}"
+            )
         for merged_manifest in merged_manifest_paths:
             try:
                 merged_permissions, declared_permissions = parse_manifest_permissions(
