@@ -46,7 +46,7 @@ object NewMessageNotifier {
         NotificationChannels.ensure(context)
 
         val notification: Notification = NotificationCompat.Builder(context, NotificationChannels.MESSAGES)
-            .setSmallIcon(R.drawable.ic_still_sms_launcher)
+            .setSmallIcon(R.drawable.ic_still_sms_notification)
             .setContentTitle(sender)
             .setContentText(preview)
             .setStyle(NotificationCompat.BigTextStyle().bigText(preview))
