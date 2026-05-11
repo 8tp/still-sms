@@ -54,6 +54,7 @@ import dev.chuds.stillsms.ui.theme.StillTypography
 
 @Composable
 fun ThreadScreen(
+    threadId: Long,
     title: String,
     subtitle: String?,
     photoUri: String?,
@@ -67,7 +68,10 @@ fun ThreadScreen(
     onOpenContact: () -> Unit,
     onBack: () -> Unit,
 ) {
-    var draft by rememberSaveable(title, subtitle) { mutableStateOf(initialDraft) }
+    // Key the draft saver on threadId — two unknown-sender threads can resolve to the
+    // same title (raw number rendered as both title and subtitle), and keying on display
+    // strings would let them share saved-state across process death.
+    var draft by rememberSaveable(threadId) { mutableStateOf(initialDraft) }
     val listState = rememberLazyListState()
 
     LaunchedEffect(initialDraft) {

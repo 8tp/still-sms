@@ -315,6 +315,7 @@ fun StillSmsApp(
                             ?: liveInfo?.displayName?.takeIf { it.isNotBlank() }
                         val resolvedPhotoUri = thread?.photoUri ?: liveInfo?.photoUri
                         ThreadScreen(
+                            threadId = current.threadId,
                             title = resolvedDisplayName ?: resolvedAddress.ifBlank { "new" },
                             subtitle = resolvedDisplayName?.let { resolvedAddress.takeIf { it.isNotBlank() } },
                             photoUri = resolvedPhotoUri,
