@@ -8,6 +8,29 @@ import org.junit.Test
 
 class MmsPduCodecTest {
     @Test
+    fun parseNotificationInd_keepsAlignmentAfterMessageIdAndClass() {
+        val pdu = buildByteArray {
+            appendHeaderShort(MmsField.MESSAGE_TYPE, MmsMessageType.M_NOTIFICATION_IND)
+            appendHeaderTextString(MmsField.TRANSACTION_ID, "notify-tx")
+            appendHeaderShort(MmsField.MMS_VERSION, MmsVersion.V1_0)
+            appendHeaderTextString(MmsField.MESSAGE_ID, "carrier-message-id")
+            appendHeaderTextString(MmsField.MESSAGE_CLASS, "personal")
+            appendHeaderTextString(MmsField.CONTENT_LOCATION, "https://mmsc.example/msg")
+            appendHeaderLongInt(MmsField.MESSAGE_SIZE, 42)
+            appendHeaderEncodedString(MmsField.FROM, "+15551234567")
+            appendHeaderEncodedString(MmsField.SUBJECT, "hello")
+        }
+
+        val decoded = MmsPduDecoder.parseNotificationInd(pdu)
+
+        assertEquals("notify-tx", decoded.transactionId)
+        assertEquals("https://mmsc.example/msg", decoded.contentLocation)
+        assertEquals("+15551234567", decoded.from)
+        assertEquals(42L, decoded.messageSize)
+        assertEquals("hello", decoded.subject)
+    }
+
+    @Test
     fun encodeSendReq_canBeDecodedAsMultipartWithInlineImage() {
         val text = "caption from still-sms"
         val parts = listOf(
@@ -130,6 +153,19 @@ class MmsPduCodecTest {
     private fun java.io.ByteArrayOutputStream.appendHeaderTextString(field: Int, value: String) {
         write(field)
         writeTextString(value)
+    }
+
+    private fun java.io.ByteArrayOutputStream.appendHeaderLongInt(field: Int, value: Long) {
+        write(field)
+        require(value >= 0)
+        val bytes = ArrayList<Int>()
+        var v = value
+        do {
+            bytes += (v and 0xFF).toInt()
+            v = v ushr 8
+        } while (v > 0)
+        write(bytes.size)
+        for (i in bytes.indices.reversed()) write(bytes[i])
     }
 
     private fun java.io.ByteArrayOutputStream.appendHeaderEncodedString(field: Int, value: String) {

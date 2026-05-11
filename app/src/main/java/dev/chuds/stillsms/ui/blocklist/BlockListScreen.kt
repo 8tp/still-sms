@@ -89,7 +89,7 @@ fun BlockListScreen(
                         if (entry.isNotBlank()) {
                             val normalized = BlockListMatcher.normalize(entry.trim())
                             if (normalized == null) {
-                                error = "use +countrycode"
+                                error = "use number or sender id"
                             } else {
                                 onAdd(normalized)
                                 entry = ""
